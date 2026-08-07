@@ -10,6 +10,7 @@ from app.core.security import verify_internal_caller
 from app.domains.embedding.router import router as embedding_router
 from app.domains.health.router import router as health_router
 from app.domains.matching.router import router as matching_router
+from app.domains.negotiation.router import router as negotiation_router
 
 # 인증 없이 열리는 경로
 public_router = APIRouter()
@@ -19,3 +20,4 @@ public_router.include_router(health_router)
 internal_router = APIRouter(prefix="/api/v1", dependencies=[Depends(verify_internal_caller)])
 internal_router.include_router(embedding_router)
 internal_router.include_router(matching_router)
+internal_router.include_router(negotiation_router)
