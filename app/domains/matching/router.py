@@ -3,11 +3,14 @@
 from typing import Annotated
 
 from fastapi import APIRouter, Depends
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.clients.gemini import GeminiClient, get_gemini_client
 from app.core.response import ApiResponse
+from app.db.session import get_session
 from app.domains.embedding.router import get_service as get_embedding_service
 from app.domains.embedding.service import EmbeddingService
+from app.domains.matching.repository import DirectoryRepository
 from app.domains.matching.schemas import MatchingRequest, MatchingResponse
 from app.domains.matching.service import MatchingService
 
@@ -17,8 +20,9 @@ router = APIRouter(prefix="/matchings", tags=["02. Matching"])
 def get_service(
     embedding_service: Annotated[EmbeddingService, Depends(get_embedding_service)],
     gemini: Annotated[GeminiClient, Depends(get_gemini_client)],
+    session: Annotated[AsyncSession, Depends(get_session)],
 ) -> MatchingService:
-    return MatchingService(embedding_service, gemini)
+    return MatchingService(embedding_service, gemini, DirectoryRepository(session))
 
 
 @router.post("/recommendations")

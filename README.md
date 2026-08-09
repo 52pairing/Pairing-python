@@ -70,7 +70,9 @@ ai-server/
 │   └── domains/                 도메인별 수직 분할
 │       ├── health/router.py
 │       ├── embedding/           router → service → repository → models/schemas
-│       └── matching/            router → service → schemas
+│       └── matching/            router → service → repository → schemas
+│                                 (matching의 repository는 AI 소유 테이블이 아니라
+│                                  스프링 소유 테이블을 읽기 전용으로 조회한다 — §4 참고)
 ├── db/init/10-create-ai-schema.sql   AI 소유 테이블 (pgvector)
 ├── tests/
 ├── pyproject.toml
@@ -137,6 +139,7 @@ X-Trace-Id: a1b2c3d4
 | `AI_001` | 500 | 서버 내부 오류 |
 | `AI_002` | 400 | 요청 검증 실패 (`message`에 필드명 포함) |
 | `AI_003` | 401 | 내부 키 불일치 |
+| `AI_004` | 404 | 대상 없음 (예: 삭제된 포지션으로 추천 요청) |
 | `AI_010` | 502 | 임베딩 생성 실패 |
 | `AI_011` | 404 | 임베딩 미생성 (포지션 등록 시 호출 누락) |
 | `AI_012` / `AI_013` / `AI_014` | 502/504/502 | LLM 실패 / 타임아웃 / 응답 형식 오류 |
