@@ -11,7 +11,9 @@ class MatchingRequest(BaseModel):
 class RankedCandidate(BaseModel):
     freelancer_id: int
     score: float = Field(..., description="0~1. 벡터 유사도와 LLM 판단을 합친 최종 점수")
-    reason: str = Field(..., description="추천 사유. 클라이언트 화면에 노출된다")
+    reason: str = Field(
+        ..., description='추천 사유. "|"로 이어붙인 문자열 — 스프링이 이 구분자로 다시 나눠 노출한다'
+    )
 
 
 class MatchingResponse(BaseModel):
