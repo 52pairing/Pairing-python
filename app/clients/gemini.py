@@ -28,6 +28,7 @@ class GeminiTask(Enum):
     MATCHING = "matching"
     REVIEW = "review"
     NEGOTIATION = "negotiation"
+    CONTRACT = "contract"
 
 
 class GeminiClient:
@@ -41,6 +42,7 @@ class GeminiClient:
             GeminiTask.MATCHING: self._settings.gemini_model_matching,
             GeminiTask.REVIEW: self._settings.gemini_model_review,
             GeminiTask.NEGOTIATION: self._settings.gemini_model_negotiation,
+            GeminiTask.CONTRACT: self._settings.gemini_model_contract,
         }
         return mapping[task]
 

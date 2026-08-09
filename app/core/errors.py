@@ -34,6 +34,8 @@ class AiErrorCode(Enum):
     CANDIDATE_POOL_EMPTY = (404, "AI_020", "추천할 후보가 없습니다.")
     SPRING_CALL_FAILED = (502, "AI_030", "백엔드 서버 호출에 실패했습니다.")
 
+    CONTRACT_DRAFT_FAILED = (502, "AI_040", "계약서 문구 생성에 실패했습니다.")
+
     @property
     def status(self) -> int:
         return self.value[0]
