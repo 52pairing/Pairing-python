@@ -14,7 +14,7 @@ from app.clients.gemini import GeminiClient, GeminiTask
 from app.core.errors import AiErrorCode, AiException
 from app.domains.embedding.schemas import SimilaritySearchResponse
 from app.domains.embedding.service import EmbeddingService
-from app.domains.matching.directory_repository import (
+from app.domains.matching.repository import (
     DirectoryRepository,
     FreelancerProfile,
     PositionRequirement,

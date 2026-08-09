@@ -70,7 +70,9 @@ ai-server/
 │   └── domains/                 도메인별 수직 분할
 │       ├── health/router.py
 │       ├── embedding/           router → service → repository → models/schemas
-│       └── matching/            router → service → schemas
+│       └── matching/            router → service → repository → schemas
+│                                 (matching의 repository는 AI 소유 테이블이 아니라
+│                                  스프링 소유 테이블을 읽기 전용으로 조회한다 — §4 참고)
 ├── db/init/10-create-ai-schema.sql   AI 소유 테이블 (pgvector)
 ├── tests/
 ├── pyproject.toml

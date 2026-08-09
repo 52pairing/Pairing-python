@@ -10,7 +10,7 @@ from app.core.response import ApiResponse
 from app.db.session import get_session
 from app.domains.embedding.router import get_service as get_embedding_service
 from app.domains.embedding.service import EmbeddingService
-from app.domains.matching.directory_repository import DirectoryRepository
+from app.domains.matching.repository import DirectoryRepository
 from app.domains.matching.schemas import MatchingRequest, MatchingResponse
 from app.domains.matching.service import MatchingService
 

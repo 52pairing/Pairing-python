@@ -6,7 +6,7 @@ import pytest
 
 from app.core.errors import AiErrorCode, AiException
 from app.domains.embedding.schemas import SimilarFreelancer, SimilaritySearchResponse
-from app.domains.matching.directory_repository import FreelancerProfile, PositionRequirement
+from app.domains.matching.repository import FreelancerProfile, PositionRequirement
 from app.domains.matching.service import MatchingService
 
 _POSITION = PositionRequirement(
