@@ -27,6 +27,7 @@ class GeminiTask(Enum):
     EMBEDDING = "embedding"
     MATCHING = "matching"
     REVIEW = "review"
+    NEGOTIATION = "negotiation"
 
 
 class GeminiClient:
@@ -39,6 +40,7 @@ class GeminiClient:
             GeminiTask.EMBEDDING: self._settings.gemini_model_embedding,
             GeminiTask.MATCHING: self._settings.gemini_model_matching,
             GeminiTask.REVIEW: self._settings.gemini_model_review,
+            GeminiTask.NEGOTIATION: self._settings.gemini_model_negotiation,
         }
         return mapping[task]
 
