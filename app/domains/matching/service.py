@@ -129,7 +129,6 @@ class MatchingService:
             ("담당 업무", position.main_task),
             ("업무 범위", position.detail_scope),
             ("우대사항", position.extra_note),
-            ("포지션 우대사항", position.preferred_note),
         ):
             if value:
                 lines.append(f"{label}: {value}")
