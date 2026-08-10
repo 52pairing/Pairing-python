@@ -23,6 +23,18 @@ from app.domains.matching.schemas import MatchingResponse, RankedCandidate
 
 logger = logging.getLogger(__name__)
 
+_PERIOD_LABELS = {"MONTH": "개월", "WEEK": "주"}
+_PAY_UNIT_LABELS = {"HOURLY": "시급", "DAILY": "일급", "MONTHLY": "월급"}
+
+
+def _period_label(unit: str | None) -> str:
+    return _PERIOD_LABELS.get(unit, unit or "")
+
+
+def _pay_unit_label(unit: str | None) -> str:
+    return _PAY_UNIT_LABELS.get(unit, unit or "")
+
+
 _RANKING_SCHEMA = {
     "type": "object",
     "properties": {
@@ -66,8 +78,8 @@ class MatchingService:
             raise AiException(AiErrorCode.NOT_FOUND, "포지션을 찾을 수 없습니다.")
 
         # 하드필터(Stage B): AI매칭 동의 + 매칭 일시중지 아님 + 직군/직무 일치. 벡터 검색 전에 미리
-        # 걸러서 후보 풀 자체를 줄인다(일정/근무조건/단가는 여기서 안 봄 — Stage E 감점으로 넘김, service
-        # 상단 문서 참고).
+        # 걸러서 후보 풀 자체를 줄인다. 일정/근무조건/단가는 여기서 안 본다 — 후보를 배제하지 않고
+        # Stage E(_build_prompt)에서 감점 요인으로만 반영한다.
         pool_size = recruit_count * pool_multiplier
         pool = await self._embedding_service.search_candidates(
             position_id, pool_size, position.job_category, position.job_role, excluded_freelancer_ids
@@ -117,8 +129,19 @@ class MatchingService:
         return (
             "너는 프리랜서 매칭 심사자다. 아래 포지션 요구조건에 맞춰 후보를 적합한 순서로 정렬하고 "
             f"상위 {recruit_count}명을 골라라.\n"
+            "직군/직무/AI매칭 동의는 이미 걸러진 후보들이다. 경력·스킬·자기소개·경력사항의 적합도를 "
+            "우선 보고 판단해라.\n"
+            "희망 급여·근무 방식·근무 형태·시작 가능일·희망 기간이 포지션 조건과 어긋나는 후보는 "
+            "**후보에서 제외하지 말고 감점만 하고, 어긋난 내용을 reason에 함께 적어라.** "
+            "조건이 맞는 후보가 부족하면 어긋난 후보도 노출돼야 하기 때문이다. "
+            "감점 폭은 어긋난 정도에 비례해서 네가 판단해라 — 정해진 공식은 없다. "
+            "'협의 가능'으로 표시된 항목은 어긋나도 감점하지 마라.\n"
+            "단가를 볼 때 주의: 포지션의 총예산은 프로젝트 전체 인원·전체 기간을 합친 금액이고 "
+            "후보의 희망 급여는 1인 단위 금액이다. 두 숫자를 그대로 비교하지 말고 기간과 인원을 "
+            "감안해서 판단해라. 총예산은 참고치이고 확정된 1인 상한이 아니므로, 조금 넘는 정도로는 "
+            "크게 감점하지 마라.\n"
             'reason은 짧은 근거 여러 개를 "|"로 이어붙인 하나의 문자열로 써라 '
-            '(예: "백엔드 경력 5년 이상 충족|Spring 스킬 보유|자기소개에 유사 프로젝트 경험 언급"). '
+            '(예: "백엔드 경력 5년 이상 충족|Spring 스킬 보유|희망 단가가 예산 상한을 웃돎"). '
             "문장으로 쓰지 말고 근거 단위로 끊어라.\n\n"
             f"{self._describe_position(position)}\n\n"
             "후보 목록:\n" + "\n\n".join(candidate_blocks)
@@ -133,6 +156,13 @@ class MatchingService:
             f"필요 스킬: {', '.join(position.skills) if position.skills else '명시 없음'}",
             f"근무 형태: {position.work_style}/{position.work_form}",
         ]
+        if position.budget_amount is not None:
+            lines.append(f"프로젝트 총예산: {int(position.budget_amount)}원 (기간 전체 총액, 부가세 별도)")
+        if position.period_value is not None:
+            lines.append(f"예상 기간: {position.period_value}{_period_label(position.period_unit)}")
+        if position.start_desired_date is not None:
+            start = f"시작 희망일: {position.start_desired_date}"
+            lines.append(start + " (협의 가능)" if position.start_negotiable else start)
         for label, value in (
             ("현재 상황", position.current_situation),
             ("담당 업무", position.main_task),
@@ -152,6 +182,17 @@ class MatchingService:
             + ("(프리랜서 경험 있음)" if profile.has_freelance_exp else ""),
             f"  스킬: {', '.join(profile.skills) if profile.skills else '명시 없음'}",
         ]
+        if profile.pay_amount is not None:
+            lines.append(
+                f"  희망 급여: {_pay_unit_label(profile.pay_unit)} {int(profile.pay_amount)}원"
+            )
+        if profile.work_style or profile.work_form:
+            lines.append(f"  희망 근무: {profile.work_style}/{profile.work_form}")
+        if profile.available_from is not None:
+            available = f"  시작 가능일: {profile.available_from}"
+            lines.append(available + " (협의 가능)" if profile.start_negotiable else available)
+        if profile.period_value is not None:
+            lines.append(f"  희망 기간: {profile.period_value}{_period_label(profile.period_unit)}")
         if profile.self_introduction:
             lines.append(f"  자기소개: {profile.self_introduction}")
         if profile.career_summary:
