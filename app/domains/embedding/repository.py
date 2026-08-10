@@ -15,6 +15,7 @@ _freelancer_profile = table(
     column("id", BigInteger),
     column("account_id", BigInteger),
     column("ai_matching_agreed", Boolean),
+    column("matching_paused", Boolean),
 )
 _freelancer_condition = table(
     "freelancer_condition",
@@ -80,10 +81,11 @@ class EmbeddingRepository:
     ) -> list[tuple[int, float]]:
         """코사인 거리 기준 최근접 검색. 거리(0~2)를 유사도(1~-1)로 바꿔 돌려준다.
 
-        하드필터(Stage B): AI매칭 동의 + 계정 활성 + 직군/직무 일치만 본다. 일정/근무조건/단가는
-        여기서 거르지 않는다 — 사전검수(P02)가 안내하는 후보 수와 어긋나면 착수금 클레임 리스크가
-        생겨서, Stage E(LLM 최종선정) 감점으로 넘긴다(`.ai/STATE.md` "Stage B 조건필터 폐기" 참고).
-        job_category/job_role이 없으면(내부용 후보 미리보기 엔드포인트) 필터 없이 순수 벡터 검색만 한다.
+        하드필터(Stage B): AI매칭 동의 + 매칭 일시중지 아님 + 계정 활성 + 직군/직무 일치만 본다.
+        일정/근무조건/단가는 여기서 거르지 않는다 — 사전검수(P02)가 안내하는 후보 수와 어긋나면
+        착수금 클레임 리스크가 생겨서, Stage E(LLM 최종선정) 감점으로 넘긴다(`.ai/STATE.md`
+        "Stage B 조건필터 폐기" 참고). job_category/job_role이 없으면(내부용 후보 미리보기
+        엔드포인트) 필터 없이 순수 벡터 검색만 한다.
         """
         distance = FreelancerEmbedding.embedding.cosine_distance(vector)
         stmt = select(FreelancerEmbedding.freelancer_id, distance.label("distance"))
@@ -98,6 +100,7 @@ class EmbeddingRepository:
                 .join(_account, _account.c.id == _freelancer_profile.c.account_id)
                 .where(
                     _freelancer_profile.c.ai_matching_agreed.is_(True),
+                    _freelancer_profile.c.matching_paused.is_(False),
                     _account.c.status == "ACTIVE",
                     _freelancer_condition.c.job_category == job_category,
                     _freelancer_condition.c.job_role == job_role,
