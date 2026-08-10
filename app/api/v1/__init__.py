@@ -7,6 +7,7 @@
 from fastapi import APIRouter, Depends
 
 from app.core.security import verify_internal_caller
+from app.domains.chatbot.router import router as chatbot_router
 from app.domains.embedding.router import router as embedding_router
 from app.domains.health.router import router as health_router
 from app.domains.matching.router import router as matching_router
@@ -21,3 +22,4 @@ internal_router = APIRouter(prefix="/api/v1", dependencies=[Depends(verify_inter
 internal_router.include_router(embedding_router)
 internal_router.include_router(matching_router)
 internal_router.include_router(negotiation_router)
+internal_router.include_router(chatbot_router)
