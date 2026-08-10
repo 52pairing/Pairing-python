@@ -162,6 +162,11 @@ X-Trace-Id: a1b2c3d4
 | POST | `/api/v1/matchings/recommendations` | 매칭 라운드 시작 시 |
 | POST | `/api/v1/contracts/draft-texts` | 협상 타결 후 계약서 생성 시 |
 
+**추천 응답의 `score`는 0~100입니다.** 스프링이 `matching_candidate.base_score`(NUMERIC(5,2), 0~100)에
+그대로 저장하고 **50점 미만을 `lowScoreWarned`(적합도 낮음 경고) 기준**으로 씁니다. 범위를 바꾸려면
+프롬프트·스키마·스프링을 함께 바꿔야 합니다. 프롬프트에 범위를 명시하지 않으면 LLM이 10점 만점으로
+매겨서(실제 확인: `score=9.5`) 모든 후보가 항상 저품질로 찍힙니다 — 에러가 안 나서 발견이 어렵습니다.
+
 ### 3-6. 스프링 쪽 호출 예시
 
 ```java

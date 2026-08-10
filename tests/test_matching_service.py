@@ -138,6 +138,29 @@ async def test_prompt_includes_condition_fields_for_stage_e_penalty():
 
 
 @pytest.mark.asyncio
+async def test_prompt_pins_score_range_to_0_100():
+    """점수 범위를 안 알려주면 LLM이 10점 만점으로 매긴다(실제 Gemini 호출로 확인: score=9.5).
+
+    스프링은 이 값을 matching_candidate.base_score(0~100)에 그대로 저장하고 50점을
+    '적합도 낮음' 기준으로 쓰기 때문에, 범위를 안 박아두면 모든 후보가 항상 저품질로 찍힌다.
+    """
+    service = _make_service({101: _profile(101)}, llm_response="{}")
+
+    prompt = service._build_prompt(
+        _POSITION,
+        SimilaritySearchResponse(
+            position_id=1, candidates=[SimilarFreelancer(freelancer_id=101, score=0.9)]
+        ),
+        {101: _profile(101)},
+        recruit_count=1,
+    )
+
+    assert "0~100" in prompt
+    # 스프링의 lowScoreWarned 기준선(50점)도 함께 알려줘야 점수가 의미를 갖는다.
+    assert "50점" in prompt
+
+
+@pytest.mark.asyncio
 async def test_prompt_marks_negotiable_start_date_so_llm_does_not_penalize_it():
     service = _make_service({101: _profile(101)}, llm_response="{}")
 
