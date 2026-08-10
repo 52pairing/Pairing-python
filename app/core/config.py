@@ -46,7 +46,8 @@ class Settings(BaseSettings):
     gemini_max_retries: int = 2
 
     # 저장 차원. gemini-embedding-001 은 기본 3072 이라 embed 호출에서 이 값으로 축소해 받는다
-    # (DB 컬럼·기존 벡터와 맞추기 위함). 이 값을 바꾸면 pgvector 컬럼과 기존 임베딩 전량 재생성이 함께 필요하다.
+    # (DB 컬럼·기존 벡터와 맞추기 위함).
+    # 이 값을 바꾸면 pgvector 컬럼과 기존 임베딩 전량 재생성이 함께 필요하다.
     embedding_dimension: int = 768
 
 
