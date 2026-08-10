@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends
 
 from app.clients.gemini import GeminiClient, get_gemini_client
 from app.core.response import ApiResponse
+from app.domains.ai_log.repository import AiAgentLogRepository
 from app.domains.negotiation.schemas import ProposeRequest, ProposeResponse
 from app.domains.negotiation.service import NegotiationService
 
@@ -15,7 +16,8 @@ router = APIRouter(prefix="/negotiations", tags=["03. Negotiation"])
 def get_service(
     gemini: Annotated[GeminiClient, Depends(get_gemini_client)],
 ) -> NegotiationService:
-    return NegotiationService(gemini)
+    # 로그 저장소는 자기 세션을 열어 쓰므로 요청 세션(get_session)을 주입받지 않는다.
+    return NegotiationService(gemini, AiAgentLogRepository())
 
 
 @router.post("/propose")

@@ -15,8 +15,15 @@
 import json
 import logging
 
-from app.clients.gemini import GeminiClient, GeminiTask
+from app.clients.gemini import GeminiClient, GeminiTask, GeminiUsage
 from app.core.errors import AiErrorCode, AiException
+from app.domains.ai_log.repository import (
+    AgentType,
+    AiAgentLogRepository,
+    AiCallRecord,
+    LogStatus,
+    RefType,
+)
 from app.domains.negotiation.schemas import (
     AgentMessage,
     ConditionOutcome,
@@ -62,15 +69,42 @@ _RESPONSE_SCHEMA = {
 
 
 class NegotiationService:
-    def __init__(self, gemini: GeminiClient):
+    def __init__(
+        self,
+        gemini: GeminiClient,
+        ai_log_repository: AiAgentLogRepository | None = None,
+    ):
         self._gemini = gemini
+        # 없으면 로그만 안 남기고 그대로 동작한다(테스트에서 굳이 안 넣어도 되게).
+        self._ai_log_repository = ai_log_repository
 
     async def propose(self, request: ProposeRequest) -> ProposeResponse:
         model = self._gemini.model_for(GeminiTask.NEGOTIATION)
-        raw = await self._gemini.generate_json(
-            GeminiTask.NEGOTIATION, self._build_prompt(request), _RESPONSE_SCHEMA
+        prompt = self._build_prompt(request)
+        try:
+            raw, usage = await self._gemini.generate_json_with_usage(
+                GeminiTask.NEGOTIATION, prompt, _RESPONSE_SCHEMA
+            )
+        except AiException as exc:
+            await self._record_call(request, model, prompt, None, None, str(exc))
+            raise
+
+        try:
+            messages, outcomes = self._parse(raw, request)
+        except AiException as exc:
+            # 파싱·검증 실패는 호출 실패보다 원인 찾기가 어렵다. 응답 원문을 남겨야
+            # "LLM 이 무엇을 돌려줘서 못 썼는지"를 나중에 되짚을 수 있다.
+            await self._record_call(request, model, prompt, raw, usage, str(exc))
+            raise
+
+        await self._record_call(request, model, prompt, raw, usage, None)
+        return ProposeResponse(
+            negotiation_id=request.negotiation_id, model=model, messages=messages, outcomes=outcomes
         )
 
+    def _parse(
+        self, raw: str, request: ProposeRequest
+    ) -> tuple[list[AgentMessage], list[ConditionOutcome]]:
         try:
             parsed = json.loads(raw)
             messages = [AgentMessage(**m) for m in parsed["messages"]]
@@ -93,8 +127,39 @@ class NegotiationService:
         if not messages:
             raise AiException(AiErrorCode.LLM_RESPONSE_INVALID, "대화가 비어 있습니다.")
 
-        return ProposeResponse(
-            negotiation_id=request.negotiation_id, model=model, messages=messages, outcomes=outcomes
+        return messages, outcomes
+
+    async def _record_call(
+        self,
+        request: ProposeRequest,
+        model: str,
+        prompt: str,
+        raw: str | None,
+        usage: GeminiUsage | None,
+        error_message: str | None,
+    ) -> None:
+        """A2A 제안 LLM 호출 1건 = ai_agent_log 1행.
+
+        협상은 stub 폴백이 있어서 파이썬이 실패해도 스프링 쪽은 계속 돈다. 그래서 실패가
+        화면에 드러나지 않는다 — 여기 남기지 않으면 "왜 stub 대화가 나왔는지"를 알 수 없다.
+        """
+        if self._ai_log_repository is None:
+            return
+        await self._ai_log_repository.record(
+            AiCallRecord(
+                agent_type=AgentType.NEGOTIATOR,
+                status=LogStatus.FAILED if error_message else LogStatus.SUCCESS,
+                ref_type=RefType.NEGOTIATION,
+                ref_id=request.negotiation_id,
+                model=model,
+                request_json={"prompt": prompt, "round": request.round},
+                response_json={"raw": raw} if raw is not None else None,
+                prompt_tokens=usage.prompt_tokens if usage else None,
+                output_tokens=usage.output_tokens if usage else None,
+                latency_ms=usage.latency_ms if usage else None,
+                retry_count=usage.retry_count if usage else 0,
+                error_message=error_message,
+            )
         )
 
     def _build_prompt(self, request: ProposeRequest) -> str:
