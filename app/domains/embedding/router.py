@@ -25,7 +25,7 @@ def get_service(
     session: Annotated[AsyncSession, Depends(get_session)],
     gemini: Annotated[GeminiClient, Depends(get_gemini_client)],
 ) -> EmbeddingService:
-    return EmbeddingService(EmbeddingRepository(session), gemini, AiAgentLogRepository(session))
+    return EmbeddingService(EmbeddingRepository(session), gemini, AiAgentLogRepository())
 
 
 @router.put("/freelancers")

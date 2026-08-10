@@ -24,7 +24,7 @@ def get_service(
     session: Annotated[AsyncSession, Depends(get_session)],
 ) -> MatchingService:
     return MatchingService(
-        embedding_service, gemini, DirectoryRepository(session), AiAgentLogRepository(session)
+        embedding_service, gemini, DirectoryRepository(session), AiAgentLogRepository()
     )
 
 
