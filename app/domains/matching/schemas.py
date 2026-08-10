@@ -6,6 +6,10 @@ class MatchingRequest(BaseModel):
     recruit_count: int = Field(..., ge=1, le=50, description="모집 인원")
     # 1차 후보 풀은 모집 인원 x 3 이다. (요구사항 기준값)
     pool_multiplier: int = Field(default=3, ge=1, le=10)
+    excluded_freelancer_ids: list[int] = Field(
+        default_factory=list,
+        description="같은 프로젝트에서 이미 후보로 노출됐던 freelancer_id 목록. 벡터 검색 전에 제외한다",
+    )
 
 
 class RankedCandidate(BaseModel):

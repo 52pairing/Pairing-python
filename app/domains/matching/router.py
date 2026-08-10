@@ -31,6 +31,9 @@ async def recommend(
     service: Annotated[MatchingService, Depends(get_service)],
 ) -> ApiResponse[MatchingResponse]:
     result = await service.recommend(
-        request.position_id, request.recruit_count, request.pool_multiplier
+        request.position_id,
+        request.recruit_count,
+        request.pool_multiplier,
+        request.excluded_freelancer_ids,
     )
     return ApiResponse.success("RECOMMENDATION_COMPLETED", "추천을 완료했습니다.", result)
