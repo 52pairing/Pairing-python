@@ -7,11 +7,11 @@
 from fastapi import APIRouter, Depends
 
 from app.core.security import verify_internal_caller
+from app.domains.contract.router import router as contract_router
 from app.domains.embedding.router import router as embedding_router
 from app.domains.health.router import router as health_router
 from app.domains.matching.router import router as matching_router
 from app.domains.negotiation.router import router as negotiation_router
-from app.domains.contract.router import router as contract_router
 
 # 인증 없이 열리는 경로
 public_router = APIRouter()
