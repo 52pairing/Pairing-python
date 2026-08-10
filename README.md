@@ -196,7 +196,11 @@ public MatchingResult recommend(Long positionId, int recruitCount) {
 | 테이블 | 쓰기 | 읽기 |
 | --- | --- | --- |
 | `freelancer_embedding`, `position_embedding` | AI 서버 | AI 서버 |
+| `ai_agent_log` | AI 서버 | **스프링**(관리자 화면) + AI 서버 |
 | `account`, `project_position`, `matching_*` 등 | 스프링 | AI 서버(읽기만) |
+
+`ai_agent_log`는 AI 서버가 쓰지만 **스키마 원본은 백엔드 레포**(`db/init/02-create-schema.sql`)에
+있습니다 — 스프링 관리자 화면이 이 테이블을 직접 조회하기 때문입니다. 자세한 내용은 아래 8번 참고.
 
 AI 서버가 스프링 소유 테이블의 상태를 바꿔야 하면 **스프링 API를 호출**합니다(`clients/spring.py`). 직접 UPDATE하면 도메인 규칙(상태 전이, 알림, 정산)을 우회하게 되고, 두 서버가 같은 행을 쓰는 순간 원인 못 찾는 버그가 생깁니다.
 
@@ -236,10 +240,39 @@ gemini.model_for(GeminiTask.REVIEW)      # settings.gemini_model_review
 
 ## 7. 아직 없는 것
 
-스켈레톤 단계라 다음은 비어 있거나 stub입니다.
-
-- `MatchingService._build_prompt` — 포지션 요구조건·프리랜서 요약을 실제로 채워야 합니다
-- `ai_agent_log` 적재 (요청/응답/토큰 사용량 기록)
-- 프로젝트 등록 AI 검수(`review` 모델 용도)
-- 임베딩 배치 재생성, 고아 행 정리
+- **`ai_agent_log` 적재 — 매칭/임베딩만 연결됨.** 협상·계약·챗봇은 아직 로그를 남기지 않습니다.
+  각 도메인 담당이 붙이면 됩니다(아래 "AI 호출 로그" 참고).
+- 임베딩 고아 행 정리 (일괄 재생성은 백엔드의 관리자 재색인 API로 해결됨)
 - 인증 실패·LLM 실패에 대한 알림/메트릭
+- `GEMINI_MODEL_REVIEW` 설정만 있고 쓰는 곳이 없습니다 — 프로젝트 등록 검수(P02)는 LLM이 아니라
+  후보 수 집계라 스프링에 구현돼 있습니다. 나중에 AI 검수가 필요해지면 그때 쓸 자리입니다.
+
+## 8. AI 호출 로그 (`ai_agent_log`)
+
+Gemini를 부를 때마다 한 행씩 남깁니다. 관리자 화면(AI Agent 관리 > 원본 로그)이 이걸 읽고,
+비용·지연·실패 추적에도 씁니다. **쓰기는 AI 서버만, 스프링은 읽기만** 합니다.
+
+기록은 서비스 계층에서 합니다. `GeminiClient`의 `*_with_usage` 메서드가 토큰 수·지연시간·재시도
+횟수를 함께 돌려주고(`GeminiUsage`), 서비스가 도메인 정보(`ref_type`/`ref_id`)를 붙여
+`AiAgentLogRepository.record()`로 남깁니다.
+
+```python
+raw, usage = await self._gemini.generate_json_with_usage(task, prompt, schema)
+await self._ai_log_repository.record(AiCallRecord(
+    agent_type=AgentType.MATCHER, status=LogStatus.SUCCESS,
+    ref_type=RefType.POSITION, ref_id=position_id,
+    model=usage.model, prompt_tokens=usage.prompt_tokens, latency_ms=usage.latency_ms, ...
+))
+```
+
+새 도메인에서 붙일 때 주의할 점:
+
+- **`ref_type`/`ref_id`를 정확히 넣어야 합니다.** 스프링 관리자 화면은
+  `WHERE ref_type = 'NEGOTIATION' AND ref_id = ?` 로 찾습니다 — 이 값이 틀리면 로그는 쌓이는데
+  화면에는 안 보입니다. 협상은 `NEGOTIATION`+`negotiation_id`, 계약은 `CONTRACT`+`contract_id`입니다.
+- **로그 실패가 본 기능을 죽이지 않습니다.** `record()`가 예외를 삼키고 경고만 남깁니다.
+  추천이 잘 나왔는데 로그 INSERT 하나 때문에 500이 나가면 안 되기 때문입니다.
+- **`cost_amount`는 비워둡니다.** Gemini는 토큰 수만 주고 금액은 안 줍니다. 모델별 단가를 코드에
+  박으면 구글이 단가를 바꿀 때 조용히 틀린 값이 쌓입니다. 토큰 수가 남아 있어 나중에 역산됩니다.
+- **임베딩 호출은 토큰 수가 안 옵니다**(`usage_metadata` 없음). 지연시간·모델·재시도는 정상입니다.
+- 프롬프트·응답 원본이 그대로 들어갑니다. 임베딩 원문처럼 긴 텍스트는 앞부분만 잘라 넣습니다.

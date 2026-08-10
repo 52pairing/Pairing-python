@@ -10,8 +10,15 @@
 import json
 import logging
 
-from app.clients.gemini import GeminiClient, GeminiTask
+from app.clients.gemini import GeminiClient, GeminiTask, GeminiUsage
 from app.core.errors import AiErrorCode, AiException
+from app.domains.ai_log.repository import (
+    AgentType,
+    AiAgentLogRepository,
+    AiCallRecord,
+    LogStatus,
+    RefType,
+)
 from app.domains.embedding.schemas import SimilaritySearchResponse
 from app.domains.embedding.service import EmbeddingService
 from app.domains.matching.repository import (
@@ -61,10 +68,13 @@ class MatchingService:
         embedding_service: EmbeddingService,
         gemini: GeminiClient,
         directory_repository: DirectoryRepository,
+        ai_log_repository: AiAgentLogRepository | None = None,
     ):
         self._embedding_service = embedding_service
         self._gemini = gemini
         self._directory_repository = directory_repository
+        # 없으면 로그만 안 남기고 그대로 동작한다(테스트에서 굳이 안 넣어도 되게).
+        self._ai_log_repository = ai_log_repository
 
     async def recommend(
         self,
@@ -92,11 +102,15 @@ class MatchingService:
         profiles = await self._directory_repository.find_freelancer_profiles(freelancer_ids)
 
         model = self._gemini.model_for(GeminiTask.MATCHING)
-        raw = await self._gemini.generate_json(
-            GeminiTask.MATCHING,
-            self._build_prompt(position, pool, profiles, recruit_count),
-            _RANKING_SCHEMA,
-        )
+        prompt = self._build_prompt(position, pool, profiles, recruit_count)
+        try:
+            raw, usage = await self._gemini.generate_json_with_usage(
+                GeminiTask.MATCHING, prompt, _RANKING_SCHEMA
+            )
+        except AiException as exc:
+            await self._record_call(position_id, model, prompt, None, None, str(exc))
+            raise
+        await self._record_call(position_id, model, prompt, raw, usage, None)
 
         try:
             parsed = json.loads(raw)
@@ -110,6 +124,39 @@ class MatchingService:
         filtered = [candidate for candidate in candidates if candidate.freelancer_id in allowed]
 
         return MatchingResponse(position_id=position_id, model=model, candidates=filtered)
+
+    async def _record_call(
+        self,
+        position_id: int,
+        model: str,
+        prompt: str,
+        raw: str | None,
+        usage: GeminiUsage | None,
+        error_message: str | None,
+    ) -> None:
+        """추천 LLM 호출 1건 = ai_agent_log 1행.
+
+        프롬프트/응답을 통째로 남긴다 — "이 추천이 왜 이렇게 나왔나"를 나중에 되짚으려면
+        그때 실제로 무엇을 보냈는지가 있어야 한다(관리자 원본 로그 화면의 목적).
+        """
+        if self._ai_log_repository is None:
+            return
+        await self._ai_log_repository.record(
+            AiCallRecord(
+                agent_type=AgentType.MATCHER,
+                status=LogStatus.FAILED if error_message else LogStatus.SUCCESS,
+                ref_type=RefType.POSITION,
+                ref_id=position_id,
+                model=model,
+                request_json={"prompt": prompt},
+                response_json={"raw": raw} if raw is not None else None,
+                prompt_tokens=usage.prompt_tokens if usage else None,
+                output_tokens=usage.output_tokens if usage else None,
+                latency_ms=usage.latency_ms if usage else None,
+                retry_count=usage.retry_count if usage else 0,
+                error_message=error_message,
+            )
+        )
 
     def _build_prompt(
         self,

@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.clients.gemini import GeminiClient, get_gemini_client
 from app.core.response import ApiResponse
 from app.db.session import get_session
+from app.domains.ai_log.repository import AiAgentLogRepository
 from app.domains.embedding.repository import EmbeddingRepository
 from app.domains.embedding.schemas import (
     EmbeddingResponse,
@@ -24,7 +25,7 @@ def get_service(
     session: Annotated[AsyncSession, Depends(get_session)],
     gemini: Annotated[GeminiClient, Depends(get_gemini_client)],
 ) -> EmbeddingService:
-    return EmbeddingService(EmbeddingRepository(session), gemini)
+    return EmbeddingService(EmbeddingRepository(session), gemini, AiAgentLogRepository(session))
 
 
 @router.put("/freelancers")

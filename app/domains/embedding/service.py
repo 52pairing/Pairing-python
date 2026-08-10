@@ -6,6 +6,13 @@ import logging
 from app.clients.gemini import GeminiClient, GeminiTask
 from app.core.config import get_settings
 from app.core.errors import AiErrorCode, AiException
+from app.domains.ai_log.repository import (
+    AgentType,
+    AiAgentLogRepository,
+    AiCallRecord,
+    LogStatus,
+    RefType,
+)
 from app.domains.embedding.repository import EmbeddingRepository
 from app.domains.embedding.schemas import (
     EmbeddingResponse,
@@ -15,16 +22,67 @@ from app.domains.embedding.schemas import (
 
 logger = logging.getLogger(__name__)
 
+# 임베딩 원문은 이력서 전체라 길다. 로그에는 앞부분만 남긴다(원인 파악에는 충분하고,
+# ai_agent_log 가 이력서 사본 저장소가 되면 안 된다).
+_LOGGED_TEXT_LIMIT = 500
+
 
 def _hash(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 class EmbeddingService:
-    def __init__(self, repository: EmbeddingRepository, gemini: GeminiClient):
+    def __init__(
+        self,
+        repository: EmbeddingRepository,
+        gemini: GeminiClient,
+        ai_log_repository: AiAgentLogRepository | None = None,
+    ):
         self._repository = repository
         self._gemini = gemini
         self._settings = get_settings()
+        # 없으면 로그만 안 남기고 그대로 동작한다(테스트에서 굳이 안 넣어도 되게).
+        self._ai_log_repository = ai_log_repository
+
+    async def _embed_and_log(self, text: str, ref_type: RefType, ref_id: int) -> list[float]:
+        """임베딩 호출 1건 = ai_agent_log 1행. 실패해도 기록하고 예외는 그대로 올린다."""
+        try:
+            vectors, usage = await self._gemini.embed_with_usage([text])
+        except AiException as exc:
+            await self._record(
+                AiCallRecord(
+                    agent_type=AgentType.EMBEDDING,
+                    status=LogStatus.FAILED,
+                    ref_type=ref_type,
+                    ref_id=ref_id,
+                    model=self._gemini.model_for(GeminiTask.EMBEDDING),
+                    request_json={"text": text[:_LOGGED_TEXT_LIMIT]},
+                    error_message=str(exc),
+                )
+            )
+            raise
+
+        await self._record(
+            AiCallRecord(
+                agent_type=AgentType.EMBEDDING,
+                status=LogStatus.SUCCESS,
+                ref_type=ref_type,
+                ref_id=ref_id,
+                model=usage.model,
+                request_json={"text": text[:_LOGGED_TEXT_LIMIT]},
+                # 벡터 768개를 그대로 넣으면 로그가 사람이 못 읽는 크기가 된다. 차원만 남긴다.
+                response_json={"dimension": len(vectors[0])},
+                prompt_tokens=usage.prompt_tokens,
+                output_tokens=usage.output_tokens,
+                latency_ms=usage.latency_ms,
+                retry_count=usage.retry_count,
+            )
+        )
+        return vectors[0]
+
+    async def _record(self, call: AiCallRecord) -> None:
+        if self._ai_log_repository is not None:
+            await self._ai_log_repository.record(call)
 
     async def upsert_freelancer(self, freelancer_id: int, text: str) -> EmbeddingResponse:
         model = self._gemini.model_for(GeminiTask.EMBEDDING)
@@ -40,7 +98,7 @@ class EmbeddingService:
                 skipped=True,
             )
 
-        vector = (await self._gemini.embed([text]))[0]
+        vector = await self._embed_and_log(text, RefType.FREELANCER, freelancer_id)
         await self._repository.upsert_freelancer(freelancer_id, vector, model, source_hash)
 
         return EmbeddingResponse(
@@ -49,7 +107,7 @@ class EmbeddingService:
 
     async def upsert_position(self, position_id: int, text: str) -> EmbeddingResponse:
         model = self._gemini.model_for(GeminiTask.EMBEDDING)
-        vector = (await self._gemini.embed([text]))[0]
+        vector = await self._embed_and_log(text, RefType.POSITION, position_id)
         await self._repository.upsert_position(position_id, vector, model, _hash(f"{model}:{text}"))
 
         return EmbeddingResponse(
