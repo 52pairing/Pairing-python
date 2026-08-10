@@ -65,8 +65,9 @@ class MatchingService:
         if position is None:
             raise AiException(AiErrorCode.NOT_FOUND, "포지션을 찾을 수 없습니다.")
 
-        # 하드필터(Stage B): AI매칭 동의 + 직군/직무 일치. 벡터 검색 전에 미리 걸러서 후보 풀
-        # 자체를 줄인다(일정/근무조건/단가는 여기서 안 봄 — Stage E 감점으로 넘김, service 상단 문서 참고).
+        # 하드필터(Stage B): AI매칭 동의 + 매칭 일시중지 아님 + 직군/직무 일치. 벡터 검색 전에 미리
+        # 걸러서 후보 풀 자체를 줄인다(일정/근무조건/단가는 여기서 안 봄 — Stage E 감점으로 넘김, service
+        # 상단 문서 참고).
         pool_size = recruit_count * pool_multiplier
         pool = await self._embedding_service.search_candidates(
             position_id, pool_size, position.job_category, position.job_role, excluded_freelancer_ids
