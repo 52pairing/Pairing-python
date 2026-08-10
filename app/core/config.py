@@ -34,15 +34,20 @@ class Settings(BaseSettings):
     # ---------- Gemini ----------
     # 키는 하나를 공유하고 용도별로 모델만 바꾼다.
     gemini_api_key: str = Field(..., description="Google AI Studio API 키")
-    gemini_model_embedding: str = "text-embedding-004"
-    gemini_model_matching: str = "gemini-2.0-flash"
-    gemini_model_review: str = "gemini-2.0-flash"
-    gemini_model_negotiation: str = "gemini-flash-latest"
-    gemini_model_contract: str = "gemini-2.0-flash"
+    # 모델은 별칭(-latest)이 아니라 버전을 고정한다. 별칭은 구글이 최신을 갈아끼우면
+    # 코드 변경 없이 동작이 바뀌어, 그 모델에 맞춰 튜닝한 프롬프트가 예고 없이 무효가 된다.
+    # 2.5 계열과 text-embedding-004 는 신규 키에서 404(no longer available to new users)라 쓸 수 없다.
+    gemini_model_embedding: str = "gemini-embedding-001"
+    gemini_model_matching: str = "gemini-3.5-flash"
+    gemini_model_review: str = "gemini-3.5-flash-lite"
+    gemini_model_negotiation: str = "gemini-3.6-flash"
+    gemini_model_contract: str = "gemini-3.5-flash"
     gemini_timeout_seconds: float = 30.0
     gemini_max_retries: int = 2
 
-    # text-embedding-004 의 차원. 모델을 바꾸면 이 값과 DB 컬럼을 함께 바꿔야 한다.
+    # 저장 차원. gemini-embedding-001 은 기본 3072 이라 embed 호출에서 이 값으로 축소해 받는다
+    # (DB 컬럼·기존 벡터와 맞추기 위함).
+    # 이 값을 바꾸면 pgvector 컬럼과 기존 임베딩 전량 재생성이 함께 필요하다.
     embedding_dimension: int = 768
 
 
