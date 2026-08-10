@@ -14,7 +14,6 @@ _POSITION = PositionRequirement(
     job_category="DEVELOPMENT",
     job_role="BACKEND",
     min_career_years=5,
-    preferred_note="MSA 경험 우대",
     current_situation="레거시 모놀리식 운영중",
     main_task="주문 도메인 API 개발",
     detail_scope="주문/결제 API 설계 및 구현",

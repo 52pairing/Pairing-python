@@ -38,6 +38,7 @@ class Settings(BaseSettings):
     gemini_model_matching: str = "gemini-2.0-flash"
     gemini_model_review: str = "gemini-2.0-flash"
     gemini_model_negotiation: str = "gemini-flash-latest"
+    gemini_model_contract: str = "gemini-2.0-flash"
     gemini_timeout_seconds: float = 30.0
     gemini_max_retries: int = 2
 

@@ -16,7 +16,6 @@ class PositionRequirement:
     job_category: str
     job_role: str
     min_career_years: int
-    preferred_note: str | None
     current_situation: str | None
     main_task: str | None
     detail_scope: str | None
@@ -48,7 +47,7 @@ class DirectoryRepository:
                 text(
                     """
                     SELECT p.title, pp.job_category, pp.job_role, pp.min_career_years,
-                           pp.preferred_note, p.current_situation, p.main_task, p.detail_scope,
+                           p.current_situation, p.main_task, p.detail_scope,
                            p.extra_note, p.work_style, p.work_form
                     FROM project_position pp
                     JOIN project p ON p.id = pp.project_id
@@ -73,7 +72,6 @@ class DirectoryRepository:
             job_category=row["job_category"],
             job_role=row["job_role"],
             min_career_years=row["min_career_years"],
-            preferred_note=row["preferred_note"],
             current_situation=row["current_situation"],
             main_task=row["main_task"],
             detail_scope=row["detail_scope"],
@@ -89,22 +87,26 @@ class DirectoryRepository:
         if not freelancer_ids:
             return {}
 
+        # freelancer_condition/resume은 freelancer_profile.id가 아니라 account_id로 연결된다
+        # (스프링 JPA 엔티티 컬럼명 기준 — db/init/*.sql 문서는 여기서 낡아 있다). freelancer_embedding이
+        # 쓰는 id는 freelancer_profile.id라 반드시 freelancer_profile을 거쳐 account_id로 다리를 놓는다.
         rows = (
             await self._session.execute(
                 text(
                     """
-                    SELECT fc.freelancer_id, fc.job_category, fc.job_role, fc.career_years,
+                    SELECT fp.id AS freelancer_id, fc.job_category, fc.job_role, fc.career_years,
                            fc.has_freelance_exp, r.self_introduction,
                            COALESCE(string_agg(
                                rc.company_name || ' ' || COALESCE(rc.department_rank, '') || ': '
                                    || COALESCE(rc.job_description, ''),
                                ' / ' ORDER BY rc.start_date DESC
                            ), '') AS career_summary
-                    FROM freelancer_condition fc
-                    LEFT JOIN resume r ON r.freelancer_id = fc.freelancer_id
+                    FROM freelancer_profile fp
+                    JOIN freelancer_condition fc ON fc.account_id = fp.account_id
+                    LEFT JOIN resume r ON r.account_id = fp.account_id
                     LEFT JOIN resume_career rc ON rc.resume_id = r.id
-                    WHERE fc.freelancer_id = ANY(:freelancer_ids)
-                    GROUP BY fc.freelancer_id, fc.job_category, fc.job_role, fc.career_years,
+                    WHERE fp.id = ANY(:freelancer_ids)
+                    GROUP BY fp.id, fc.job_category, fc.job_role, fc.career_years,
                              fc.has_freelance_exp, r.self_introduction
                     """
                 ),
@@ -116,10 +118,11 @@ class DirectoryRepository:
             await self._session.execute(
                 text(
                     """
-                    SELECT fc.freelancer_id, cs.skill_code
-                    FROM freelancer_condition fc
+                    SELECT fp.id AS freelancer_id, cs.skill_code
+                    FROM freelancer_profile fp
+                    JOIN freelancer_condition fc ON fc.account_id = fp.account_id
                     JOIN condition_skill cs ON cs.condition_id = fc.id
-                    WHERE fc.freelancer_id = ANY(:freelancer_ids)
+                    WHERE fp.id = ANY(:freelancer_ids)
                     """
                 ),
                 {"freelancer_ids": freelancer_ids},

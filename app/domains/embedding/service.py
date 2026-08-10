@@ -56,13 +56,22 @@ class EmbeddingService:
             target_id=position_id, model=model, dimension=len(vector), skipped=False
         )
 
-    async def search_candidates(self, position_id: int, limit: int) -> SimilaritySearchResponse:
+    async def search_candidates(
+        self,
+        position_id: int,
+        limit: int,
+        job_category: str | None = None,
+        job_role: str | None = None,
+        excluded_freelancer_ids: list[int] | None = None,
+    ) -> SimilaritySearchResponse:
         vector = await self._repository.find_position_vector(position_id)
         if vector is None:
             # 포지션 임베딩을 아직 안 만든 상태. 스프링이 프로젝트 등록 시 호출해야 한다.
             raise AiException(AiErrorCode.EMBEDDING_NOT_FOUND)
 
-        rows = await self._repository.search_similar_freelancers(list(vector), limit)
+        rows = await self._repository.search_similar_freelancers(
+            list(vector), limit, job_category, job_role, excluded_freelancer_ids
+        )
         return SimilaritySearchResponse(
             position_id=position_id,
             candidates=[SimilarFreelancer(freelancer_id=fid, score=score) for fid, score in rows],
