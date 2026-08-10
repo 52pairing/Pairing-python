@@ -100,11 +100,17 @@ class NegotiationService:
     def _build_prompt(self, request: ProposeRequest) -> str:
         lines = []
         for c in request.conditions:
-            lines.append(
+            line = (
                 f"- condition_id={c.condition_id}, 쟁점={c.type}, "
                 f"클라희망={c.client_value}, 프리희망={c.freelancer_value}, "
                 f"클라마지노선={c.client_floor}, 프리마지노선={c.freelancer_floor}"
             )
+            # 선택형은 후보를, 형식이 정해진 쟁점은 표기법을 함께 준다(없는 값·형식 이탈 방지).
+            if c.allowed_values:
+                line += f", 허용값={'|'.join(c.allowed_values)}"
+            if c.value_format:
+                line += f", 값형식={c.value_format}"
+            lines.append(line)
         budget = f"{request.budget_cap}" if request.budget_cap is not None else "미지정"
         return (
             "너는 프리랜서-클라이언트 채용 조건 협상을 **두 AI 대리인의 대화**로 시뮬레이션한다.\n"
@@ -116,9 +122,15 @@ class NegotiationService:
             "쟁점당 2~4개 발언으로 간결하게 수렴시킨다.\n"
             "2) 금액(AMOUNT)은 두 마지노선 사이에서, 예산 상한을 절대 넘지 않게 합의한다.\n"
             "3) 근무형태/방식 등 선택형은 양측 수용 가능한 값으로 합의한다.\n"
+            "3-1) 쟁점에 '허용값'이 주어지면 proposed_value 는 **반드시 그 목록 안의 값 그대로**만 쓴다. "
+            "목록에 없는 값을 새로 만들지 않는다(예: 허용값이 REMOTE|ONSITE|ANY 인데 HYBRID 를 쓰면 안 된다). "
+            "양측이 겹치는 허용값을 못 찾으면 억지로 만들지 말고 agreed=false 로 남긴다.\n"
+            "3-2) 쟁점에 '값형식'이 주어지면 proposed_value 는 그 형식을 정확히 지킨다"
+            "(예: 값형식=<숫자> MONTH 이면 '3' 이 아니라 '3 MONTH').\n"
             "4) 두 마지노선이 겹쳐 합의 가능한 쟁점은 outcomes.agreed=true 와 최종 proposed_value 로 마무리한다. "
             "겹치지 않아 합의 불가한 쟁점은 마지막 역제안 값을 proposed_value 로 두고 agreed=false 로 남긴다.\n"
-            "5) proposed_value 는 값만(금액은 숫자 문자열, 기간은 개월 수 문자열, 선택형은 옵션명).\n"
+            "5) proposed_value 는 설명 없이 값만 담는다(금액은 단위·콤마 없는 숫자 문자열). "
+            "'값형식'·'허용값'이 주어진 쟁점은 그 지시가 우선한다.\n"
             "6) content 는 사람에게 보일 한국어 한 문장, reason 은 한국어 한 문장 근거. 모든 발언에 필수.\n"
             "7) 마지노선 숫자를 발언 텍스트에 그대로 노출하지 않는다(가드로만 사용).\n"
             "8) messages 는 모든 쟁점의 대화를 시간순으로, outcomes 는 쟁점별 최종 결과를 담는다.\n"
