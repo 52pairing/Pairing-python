@@ -8,12 +8,14 @@ class ConditionContext(BaseModel):
     type: str = Field(..., description="AMOUNT/PERIOD/START_DATE/WORK_STYLE/WORK_FORM/SCOPE/OTHER")
     client_value: str | None = Field(default=None, description="클라 희망값(공개)")
     freelancer_value: str | None = Field(default=None, description="프리 희망값(공개)")
-    # 마지노선(비공개)은 내부 호출이라 심판이 함께 넘긴다. 대리인은 가드로만 쓰고 응답 텍스트에 노출하지 않는다.
+    # 마지노선(비공개)은 내부 호출이라 심판이 함께 넘긴다.
+    # 대리인은 가드로만 쓰고 응답 텍스트에 노출하지 않는다.
     client_floor: str | None = Field(default=None, description="클라 마지노선(가드)")
     freelancer_floor: str | None = Field(default=None, description="프리 마지노선(가드)")
     # 선택형(enum) 쟁점은 후보를 안 주면 LLM 이 없는 값을 지어낸다(예: WORK_STYLE 에 HYBRID).
     allowed_values: list[str] | None = Field(
-        default=None, description="선택형 쟁점의 허용값 목록. 있으면 proposed_value 는 반드시 이 안에서 고른다"
+        default=None,
+        description="선택형 쟁점의 허용값 목록. 있으면 proposed_value 는 반드시 이 안에서 고른다",
     )
     value_format: str | None = Field(
         default=None, description="proposed_value 표기 형식(예: '숫자만', '<숫자> MONTH', 'YYYY-MM-DD')"
