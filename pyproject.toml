@@ -1,3 +1,7 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "pairing-ai"
 version = "0.1.0"
@@ -25,6 +29,12 @@ dev = [
     "pytest-asyncio>=0.24",
     "ruff>=0.7",
 ]
+
+# 패키징 대상은 app 하나다. db/ 는 SQL 초기화 스크립트라 파이썬 패키지가 아니다.
+# 명시하지 않으면 setuptools 가 flat-layout 자동 탐색에서 app 과 db 를 둘 다 발견하고
+# "Multiple top-level packages discovered" 로 설치를 거부한다.
+[tool.setuptools.packages.find]
+include = ["app*"]
 
 [tool.ruff]
 line-length = 110
