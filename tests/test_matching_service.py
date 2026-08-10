@@ -159,8 +159,8 @@ async def test_recommend_records_failed_log_when_llm_call_fails():
 async def test_recommend_keeps_pipe_joined_reason_and_drops_ids_outside_pool():
     llm_response = (
         '{"candidates": ['
-        '{"freelancer_id": 101, "score": 0.95, "reason": "경력 충족|스킬 보유"},'
-        '{"freelancer_id": 999, "score": 0.5, "reason": "풀 밖 후보"}'
+        '{"freelancer_id": 101, "score": 95, "reason": "경력 충족|스킬 보유"},'
+        '{"freelancer_id": 999, "score": 50, "reason": "풀 밖 후보"}'
         "]}"
     )
     service = _make_service({101: _profile(101)}, llm_response=llm_response)
@@ -258,6 +258,77 @@ async def test_prompt_omits_condition_lines_when_values_are_missing():
     assert "  희망 급여:" not in prompt
     assert "  시작 가능일:" not in prompt
     assert "  희망 기간:" not in prompt
+
+
+@pytest.mark.asyncio
+async def test_recommend_rejects_scores_on_a_different_scale():
+    """실제로 났던 사고: 프롬프트에 범위를 안 박아서 LLM이 10점 만점으로 답했다(score=9.5).
+
+    범위(ge/le) 검증만으로는 0.95도 9.5도 0~100 안이라 안 걸린다. 스프링이 이 값을
+    base_score(0~100)에 그대로 저장하고 50점 미만을 '적합도 낮음'으로 보기 때문에,
+    통과시키면 모든 후보가 조용히 저품질로 찍힌다. 그래서 스케일 자체를 막는다.
+    """
+    llm_response = (
+        '{"candidates": ['
+        '{"freelancer_id": 101, "score": 0.95, "reason": "경력 충족"},'
+        '{"freelancer_id": 102, "score": 0.4, "reason": "경력 미달"}'
+        "]}"
+    )
+    service = _make_service({101: _profile(101), 102: _profile(102)}, llm_response=llm_response)
+
+    with pytest.raises(AiException) as exc_info:
+        await service.recommend(position_id=1, recruit_count=1, pool_multiplier=3)
+
+    assert exc_info.value.error_code == AiErrorCode.LLM_RESPONSE_INVALID
+
+
+@pytest.mark.asyncio
+async def test_recommend_rejects_bad_scale_even_when_hallucinated_id_looks_normal():
+    """지어낸 풀 밖 후보가 정상 점수를 달고 오면 스케일 이상이 가려질 수 있다.
+
+    최고점만 보고 판단하므로, 검증을 풀 밖 후보를 버리기 **전에** 하면 999(95점) 때문에
+    통과해 버리고 실제로 넘어갈 101(0.95점)이 그대로 스프링에 저장된다.
+    """
+    llm_response = (
+        '{"candidates": ['
+        '{"freelancer_id": 101, "score": 0.95, "reason": "정상 풀 후보"},'
+        '{"freelancer_id": 999, "score": 95, "reason": "LLM이 지어낸 풀 밖 후보"}'
+        "]}"
+    )
+    service = _make_service({101: _profile(101)}, llm_response=llm_response)
+
+    with pytest.raises(AiException) as exc_info:
+        await service.recommend(position_id=1, recruit_count=1, pool_multiplier=3)
+
+    assert exc_info.value.error_code == AiErrorCode.LLM_RESPONSE_INVALID
+
+
+@pytest.mark.asyncio
+async def test_recommend_rejects_scores_out_of_range():
+    """100 초과·음수는 pydantic 단계에서 걸러진다."""
+    llm_response = '{"candidates": [{"freelancer_id": 101, "score": 150, "reason": "경력 충족"}]}'
+    service = _make_service({101: _profile(101)}, llm_response=llm_response)
+
+    with pytest.raises(AiException) as exc_info:
+        await service.recommend(position_id=1, recruit_count=1, pool_multiplier=3)
+
+    assert exc_info.value.error_code == AiErrorCode.LLM_RESPONSE_INVALID
+
+
+@pytest.mark.asyncio
+async def test_recommend_allows_genuinely_low_score_when_scale_is_right():
+    """전원이 낮아도 한 명이라도 스케일이 0~100임을 보여주면 통과시킨다(과잉 차단 방지)."""
+    llm_response = (
+        '{"candidates": ['
+        '{"freelancer_id": 101, "score": 45, "reason": "경력 미달"},'
+        '{"freelancer_id": 102, "score": 8, "reason": "조건 다수 불일치"}'
+        "]}"
+    )
+    service = _make_service({101: _profile(101), 102: _profile(102)}, llm_response=llm_response)
+
+    result = await service.recommend(position_id=1, recruit_count=2, pool_multiplier=3)
+
+    assert [c.score for c in result.candidates] == [45, 8]
 
 
 @pytest.mark.asyncio

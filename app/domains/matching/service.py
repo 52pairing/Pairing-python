@@ -42,6 +42,39 @@ def _pay_unit_label(unit: str | None) -> str:
     return _PAY_UNIT_LABELS.get(unit, unit or "")
 
 
+# 이 값 이하만 나오면 LLM 이 0~100 이 아닌 다른 스케일(0~1, 0~10)로 답했다고 본다.
+# 후보들은 이미 하드필터(직군/직무 일치)와 벡터 유사도 상위를 통과한 사람들이라, 전원이
+# 100점 만점에 10점 이하인 상황은 사실상 나오지 않는다.
+_SUSPICIOUS_MAX_SCORE = 10
+
+
+def _assert_score_scale(candidates: list[RankedCandidate]) -> None:
+    """점수 스케일이 0~100 인지 검증한다.
+
+    `RankedCandidate.score` 의 ge/le 는 범위 밖(음수·100 초과)만 막는다. 정작 실제로 났던 사고는
+    LLM 이 10점 만점으로 답한 것(`score=9.5`)이라 범위 검증에 안 걸린다 — 스프링은 이 값을
+    base_score(0~100)에 그대로 저장하고 50점 미만을 '적합도 낮음'으로 보기 때문에, 모든 후보가
+    조용히 저품질로 찍힌다. 에러가 안 나서 발견이 어려운 종류의 사고라 여기서 명시적으로 막는다.
+
+    값을 추측해서 보정(예: ×10)하지 않고 실패시킨다. 잘못 보정하면 결국 또 조용히 틀린 점수가
+    쌓이고, 그건 지금 막으려는 문제와 같기 때문이다. 순위 자체는 스케일과 무관하게 유지되지만
+    lowScoreWarned 판정이 망가지므로 그냥 넘기지도 않는다.
+    """
+    if not candidates:
+        return
+    highest = max(candidate.score for candidate in candidates)
+    if highest <= _SUSPICIOUS_MAX_SCORE:
+        logger.warning(
+            "LLM 점수 스케일 이상: 최고점이 %s 다. 0~100 이 아닌 다른 스케일로 답한 것으로 보인다. "
+            "프롬프트의 점수 범위 지시를 확인할 것.",
+            highest,
+        )
+        raise AiException(
+            AiErrorCode.LLM_RESPONSE_INVALID,
+            f"추천 점수가 0~100 스케일이 아닙니다. (최고점 {highest})",
+        )
+
+
 _RANKING_SCHEMA = {
     "type": "object",
     "properties": {
@@ -51,7 +84,8 @@ _RANKING_SCHEMA = {
                 "type": "object",
                 "properties": {
                     "freelancer_id": {"type": "integer"},
-                    "score": {"type": "number"},
+                    # 범위를 스키마에도 박아둔다. 프롬프트 지시는 강제력이 없다.
+                    "score": {"type": "number", "minimum": 0, "maximum": 100},
                     "reason": {"type": "string"},
                 },
                 "required": ["freelancer_id", "score", "reason"],
@@ -122,6 +156,10 @@ class MatchingService:
         # LLM 이 후보 풀에 없는 ID 를 지어낼 수 있다. 풀 밖의 값은 버린다.
         allowed = {candidate.freelancer_id for candidate in pool.candidates}
         filtered = [candidate for candidate in candidates if candidate.freelancer_id in allowed]
+
+        # 스케일 검증은 **풀 밖 후보를 버린 뒤에** 한다. 지어낸 후보가 정상 점수(95)를 달고 오면
+        # 최고점이 그 값으로 잡혀서, 정작 실제로 넘어갈 후보가 0.95 여도 검증을 통과해 버린다.
+        _assert_score_scale(filtered)
 
         return MatchingResponse(position_id=position_id, model=model, candidates=filtered)
 
