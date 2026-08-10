@@ -11,6 +11,7 @@ from app.domains.embedding.router import router as embedding_router
 from app.domains.health.router import router as health_router
 from app.domains.matching.router import router as matching_router
 from app.domains.negotiation.router import router as negotiation_router
+from app.domains.contract.router import router as contract_router
 
 # 인증 없이 열리는 경로
 public_router = APIRouter()
@@ -18,6 +19,7 @@ public_router.include_router(health_router)
 
 # 스프링만 호출할 수 있는 경로
 internal_router = APIRouter(prefix="/api/v1", dependencies=[Depends(verify_internal_caller)])
+internal_router.include_router(contract_router)
 internal_router.include_router(embedding_router)
 internal_router.include_router(matching_router)
 internal_router.include_router(negotiation_router)

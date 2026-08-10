@@ -70,9 +70,12 @@ ai-server/
 │   └── domains/                 도메인별 수직 분할
 │       ├── health/router.py
 │       ├── embedding/           router → service → repository → models/schemas
-│       └── matching/            router → service → repository → schemas
-│                                 (matching의 repository는 AI 소유 테이블이 아니라
-│                                  스프링 소유 테이블을 읽기 전용으로 조회한다 — §4 참고)
+│       ├── matching/            router → service → repository → schemas
+│       │                         (matching의 repository는 AI 소유 테이블이 아니라
+│       │                          스프링 소유 테이블을 읽기 전용으로 조회한다 — §4 참고)
+│       └── contract/            router → service → schemas
+│                                 (DB를 보지 않는다. 스프링이 넘긴 원문을 계약서 문체로
+│                                  요약할 뿐이라 repository가 없다)
 ├── db/init/10-create-ai-schema.sql   AI 소유 테이블 (pgvector)
 ├── tests/
 ├── pyproject.toml
@@ -145,6 +148,7 @@ X-Trace-Id: a1b2c3d4
 | `AI_012` / `AI_013` / `AI_014` | 502/504/502 | LLM 실패 / 타임아웃 / 응답 형식 오류 |
 | `AI_020` | 404 | 추천할 후보 없음 |
 | `AI_030` | 502 | 스프링 호출 실패 |
+| `AI_040` | 502 | 계약서 문구 생성 실패 |
 
 스프링은 이 코드를 그대로 노출하지 말고 자기 도메인 코드로 감싸는 편이 낫습니다. (사용자에게 `AI_012`는 의미가 없습니다)
 
@@ -156,6 +160,7 @@ X-Trace-Id: a1b2c3d4
 | PUT | `/api/v1/embeddings/positions` | 프로젝트 포지션 등록·수정 시 |
 | GET | `/api/v1/embeddings/positions/{id}/candidates?limit=` | 1차 후보 풀 조회 |
 | POST | `/api/v1/matchings/recommendations` | 매칭 라운드 시작 시 |
+| POST | `/api/v1/contracts/draft-texts` | 협상 타결 후 계약서 생성 시 |
 
 ### 3-6. 스프링 쪽 호출 예시
 
