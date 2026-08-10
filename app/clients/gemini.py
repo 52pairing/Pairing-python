@@ -56,7 +56,14 @@ class GeminiClient:
         """텍스트를 벡터로 바꾼다. 저장 차원은 settings.embedding_dimension 과 맞아야 한다."""
         model = self.model_for(GeminiTask.EMBEDDING)
         try:
-            response = await self._client.aio.models.embed_content(model=model, contents=texts)
+            # gemini-embedding-001 은 기본 3072 차원이라 축소를 명시해야 pgvector 컬럼(768)과 맞는다.
+            response = await self._client.aio.models.embed_content(
+                model=model,
+                contents=texts,
+                config=types.EmbedContentConfig(
+                    output_dimensionality=self._settings.embedding_dimension
+                ),
+            )
         except Exception as exc:
             logger.warning("임베딩 호출 실패: model=%s, cause=%s", model, exc)
             raise AiException(AiErrorCode.EMBEDDING_FAILED) from exc
