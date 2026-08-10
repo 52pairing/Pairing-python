@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends
 
 from app.clients.gemini import GeminiClient, get_gemini_client
 from app.core.response import ApiResponse
+from app.domains.ai_log.repository import AiAgentLogRepository
 from app.domains.chatbot.schemas import AskRequest, AskResponse
 from app.domains.chatbot.service import ChatbotService
 
@@ -15,7 +16,8 @@ router = APIRouter(prefix="/chatbot", tags=["18. Support"])
 def get_service(
     gemini: Annotated[GeminiClient, Depends(get_gemini_client)],
 ) -> ChatbotService:
-    return ChatbotService(gemini)
+    # AiAgentLogRepository 는 자기 세션을 직접 열어 쓴다. Depends(get_session) 이 필요 없다.
+    return ChatbotService(gemini, AiAgentLogRepository())
 
 
 @router.post("/answer")

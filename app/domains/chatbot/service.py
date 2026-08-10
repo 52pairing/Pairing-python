@@ -12,8 +12,14 @@ GeminiTask.CHATBOT을 추가하고 이 파일의 참조만 바꾸면 된다.
 import json
 import logging
 
-from app.clients.gemini import GeminiClient, GeminiTask
+from app.clients.gemini import GeminiClient, GeminiTask, GeminiUsage
 from app.core.errors import AiErrorCode, AiException
+from app.domains.ai_log.repository import (
+    AgentType,
+    AiAgentLogRepository,
+    AiCallRecord,
+    LogStatus,
+)
 from app.domains.chatbot.schemas import AskRequest, AskResponse
 
 logger = logging.getLogger(__name__)
@@ -41,13 +47,23 @@ _POLICY_CONTEXT = """
 
 
 class ChatbotService:
-    def __init__(self, gemini: GeminiClient):
+    def __init__(self, gemini: GeminiClient, ai_log_repository: AiAgentLogRepository | None = None):
         self._gemini = gemini
+        # 없으면 로그만 안 남기고 그대로 동작한다(테스트에서 굳이 안 넣어도 되게).
+        self._ai_log_repository = ai_log_repository
 
     async def ask(self, request: AskRequest) -> AskResponse:
         model = self._gemini.model_for(GeminiTask.NEGOTIATION)
-        raw = await self._gemini.generate_json(GeminiTask.NEGOTIATION, self._build_prompt(request.question),
-                                                _ANSWER_SCHEMA)
+        prompt = self._build_prompt(request.question)
+
+        try:
+            raw, usage = await self._gemini.generate_json_with_usage(
+                GeminiTask.NEGOTIATION, prompt, _ANSWER_SCHEMA
+            )
+        except AiException as exc:
+            await self._record_call(request.question, model, None, None, str(exc))
+            raise
+        await self._record_call(request.question, model, raw, usage, None)
 
         try:
             parsed = json.loads(raw)
@@ -60,6 +76,40 @@ class ChatbotService:
             raise AiException(AiErrorCode.LLM_RESPONSE_INVALID, "답변이 비어 있습니다.")
 
         return AskResponse(answer=answer.strip(), model=model)
+
+    async def _record_call(
+        self,
+        question: str,
+        model: str,
+        raw: str | None,
+        usage: GeminiUsage | None,
+        error_message: str | None,
+    ) -> None:
+        """챗봇 LLM 호출 1건 = ai_agent_log 1행.
+
+        `ref_type`/`ref_id` 는 비운다. 챗봇은 연관 리소스가 없다 — 질문 하나만 받고 세션은
+        스프링이 관리한다.
+
+        `request_json` 에는 프롬프트 전체가 아니라 질문만 넣는다. 프롬프트의 대부분은 매번 똑같은
+        정책 텍스트라, 통째로 남기면 모든 행에 같은 내용이 복사되면서 로그만 커진다. 실제로 봐야
+        하는 건 사용자가 무엇을 물었는지다.
+        """
+        if self._ai_log_repository is None:
+            return
+        await self._ai_log_repository.record(
+            AiCallRecord(
+                agent_type=AgentType.CHATBOT,
+                status=LogStatus.FAILED if error_message else LogStatus.SUCCESS,
+                model=model,
+                request_json={"question": question},
+                response_json={"raw": raw} if raw is not None else None,
+                prompt_tokens=usage.prompt_tokens if usage else None,
+                output_tokens=usage.output_tokens if usage else None,
+                latency_ms=usage.latency_ms if usage else None,
+                retry_count=usage.retry_count if usage else 0,
+                error_message=error_message,
+            )
+        )
 
     def _build_prompt(self, question: str) -> str:
         return (
