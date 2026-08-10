@@ -283,6 +283,27 @@ async def test_recommend_rejects_scores_on_a_different_scale():
 
 
 @pytest.mark.asyncio
+async def test_recommend_rejects_bad_scale_even_when_hallucinated_id_looks_normal():
+    """지어낸 풀 밖 후보가 정상 점수를 달고 오면 스케일 이상이 가려질 수 있다.
+
+    최고점만 보고 판단하므로, 검증을 풀 밖 후보를 버리기 **전에** 하면 999(95점) 때문에
+    통과해 버리고 실제로 넘어갈 101(0.95점)이 그대로 스프링에 저장된다.
+    """
+    llm_response = (
+        '{"candidates": ['
+        '{"freelancer_id": 101, "score": 0.95, "reason": "정상 풀 후보"},'
+        '{"freelancer_id": 999, "score": 95, "reason": "LLM이 지어낸 풀 밖 후보"}'
+        "]}"
+    )
+    service = _make_service({101: _profile(101)}, llm_response=llm_response)
+
+    with pytest.raises(AiException) as exc_info:
+        await service.recommend(position_id=1, recruit_count=1, pool_multiplier=3)
+
+    assert exc_info.value.error_code == AiErrorCode.LLM_RESPONSE_INVALID
+
+
+@pytest.mark.asyncio
 async def test_recommend_rejects_scores_out_of_range():
     """100 초과·음수는 pydantic 단계에서 걸러진다."""
     llm_response = '{"candidates": [{"freelancer_id": 101, "score": 150, "reason": "경력 충족"}]}'

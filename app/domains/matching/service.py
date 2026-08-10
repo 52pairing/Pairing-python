@@ -153,11 +153,13 @@ class MatchingService:
             logger.warning("LLM 응답 파싱 실패: %s", exc)
             raise AiException(AiErrorCode.LLM_RESPONSE_INVALID) from exc
 
-        _assert_score_scale(candidates)
-
         # LLM 이 후보 풀에 없는 ID 를 지어낼 수 있다. 풀 밖의 값은 버린다.
         allowed = {candidate.freelancer_id for candidate in pool.candidates}
         filtered = [candidate for candidate in candidates if candidate.freelancer_id in allowed]
+
+        # 스케일 검증은 **풀 밖 후보를 버린 뒤에** 한다. 지어낸 후보가 정상 점수(95)를 달고 오면
+        # 최고점이 그 값으로 잡혀서, 정작 실제로 넘어갈 후보가 0.95 여도 검증을 통과해 버린다.
+        _assert_score_scale(filtered)
 
         return MatchingResponse(position_id=position_id, model=model, candidates=filtered)
 
