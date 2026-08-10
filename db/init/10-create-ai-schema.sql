@@ -9,8 +9,11 @@
 --   스프링 소유 테이블(account, project_position 등)은 읽기만 하고,
 --   상태를 바꿔야 하면 스프링 API 를 호출한다.
 --
--- 차원(768)은 text-embedding-004 기준이다.
--- 모델을 바꾸면 이 컬럼과 app.core.config 의 embedding_dimension 을 함께 바꾼다.
+-- 차원은 768로 고정한다(현재 모델: gemini-embedding-001, output_dimensionality=768로 축소 지정).
+-- 모델을 바꿔도 output_dimensionality를 768로 맞추면 이 컬럼은 안 바꿔도 된다. 차원 자체를
+-- 바꾸려면 이 컬럼과 app.core.config 의 embedding_dimension 을 함께 바꾼다.
+-- 주의: 모델을 바꾸면 차원이 같아도 벡터 공간 자체가 달라진다 — 기존 벡터와 섞이면 안 되므로
+-- Pairing-backend의 POST /api/v1/matchings/admin/embeddings/reindex 로 기존 벡터를 재생성해야 한다.
 -- =====================================================================
 
 CREATE EXTENSION IF NOT EXISTS vector;

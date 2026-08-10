@@ -212,7 +212,7 @@ gemini.model_for(GeminiTask.REVIEW)      # settings.gemini_model_review
 ```
 
 - **모델명을 코드에 직접 쓰지 않습니다.** 흩어지면 어디를 바꿔야 모델이 바뀌는지 아무도 모르게 됩니다.
-- 임베딩 모델을 바꾸면 차원이 달라집니다. `EMBEDDING_DIMENSION`, `vector(768)` 컬럼, **기존 데이터 재생성**이 세트입니다.
+- 임베딩 모델을 바꾸면 `output_dimensionality`로 차원을 맞춰도(예: 768 유지) **벡터 공간 자체는 달라집니다.** 차원이 바뀌면 `EMBEDDING_DIMENSION`/`vector(768)` 컬럼도 같이 바꿔야 하고, 차원이 안 바뀌어도 기존 벡터는 새 모델로 반드시 재생성해야 합니다 — 옛 벡터와 새 벡터가 섞이면 에러 없이 추천 결과만 조용히 틀어집니다. 재생성은 Pairing-backend의 `POST /api/v1/matchings/admin/embeddings/reindex`(관리자 전용)로 합니다.
 - 응답은 `response_schema`로 구조를 강제합니다. 자유 텍스트를 파싱하면 프롬프트 한 줄 고칠 때마다 깨집니다.
 - LLM이 없는 ID를 지어낼 수 있으므로, 결과는 항상 입력 후보 풀로 걸러서 씁니다. (`MatchingService` 참고)
 
