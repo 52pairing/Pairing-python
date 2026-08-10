@@ -5,6 +5,8 @@
 """
 
 from dataclasses import dataclass
+from datetime import date
+from decimal import Decimal
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -23,6 +25,13 @@ class PositionRequirement:
     work_style: str
     work_form: str
     skills: list[str]
+    # 일정/근무조건/단가는 하드필터로 후보를 배제하지 않고 Stage E(LLM 최종선정)에서 감점 요인으로만
+    # 쓴다(.ai/STATE.md "Stage B 조건필터 폐기" 참고). 그래서 여기서 비교용 원본 값을 같이 읽는다.
+    budget_amount: Decimal | None
+    period_value: int | None
+    period_unit: str | None
+    start_desired_date: date | None
+    start_negotiable: bool
 
 
 @dataclass
@@ -35,6 +44,14 @@ class FreelancerProfile:
     self_introduction: str | None
     career_summary: str | None
     skills: list[str]
+    pay_unit: str | None
+    pay_amount: Decimal | None
+    work_style: str | None
+    work_form: str | None
+    available_from: date | None
+    start_negotiable: bool
+    period_value: int | None
+    period_unit: str | None
 
 
 class DirectoryRepository:
@@ -48,7 +65,9 @@ class DirectoryRepository:
                     """
                     SELECT p.title, pp.job_category, pp.job_role, pp.min_career_years,
                            p.current_situation, p.main_task, p.detail_scope,
-                           p.extra_note, p.work_style, p.work_form
+                           p.extra_note, p.work_style, p.work_form,
+                           p.budget_amount, p.period_value, p.period_unit,
+                           p.start_desired_date, p.start_negotiable
                     FROM project_position pp
                     JOIN project p ON p.id = pp.project_id
                     WHERE pp.id = :position_id
@@ -79,6 +98,11 @@ class DirectoryRepository:
             work_style=row["work_style"],
             work_form=row["work_form"],
             skills=list(skills),
+            budget_amount=row["budget_amount"],
+            period_value=row["period_value"],
+            period_unit=row["period_unit"],
+            start_desired_date=row["start_desired_date"],
+            start_negotiable=row["start_negotiable"],
         )
 
     async def find_freelancer_profiles(
@@ -96,6 +120,8 @@ class DirectoryRepository:
                     """
                     SELECT fp.id AS freelancer_id, fc.job_category, fc.job_role, fc.career_years,
                            fc.has_freelance_exp, r.self_introduction,
+                           fc.pay_unit, fc.pay_amount, fc.work_style, fc.work_form,
+                           fc.available_from, fc.start_negotiable, fc.period_value, fc.period_unit,
                            COALESCE(string_agg(
                                rc.company_name || ' ' || COALESCE(rc.department_rank, '') || ': '
                                    || COALESCE(rc.job_description, ''),
@@ -107,7 +133,9 @@ class DirectoryRepository:
                     LEFT JOIN resume_career rc ON rc.resume_id = r.id
                     WHERE fp.id = ANY(:freelancer_ids)
                     GROUP BY fp.id, fc.job_category, fc.job_role, fc.career_years,
-                             fc.has_freelance_exp, r.self_introduction
+                             fc.has_freelance_exp, r.self_introduction,
+                             fc.pay_unit, fc.pay_amount, fc.work_style, fc.work_form,
+                             fc.available_from, fc.start_negotiable, fc.period_value, fc.period_unit
                     """
                 ),
                 {"freelancer_ids": freelancer_ids},
@@ -142,6 +170,14 @@ class DirectoryRepository:
                 self_introduction=row["self_introduction"],
                 career_summary=row["career_summary"],
                 skills=skills_by_freelancer.get(row["freelancer_id"], []),
+                pay_unit=row["pay_unit"],
+                pay_amount=row["pay_amount"],
+                work_style=row["work_style"],
+                work_form=row["work_form"],
+                available_from=row["available_from"],
+                start_negotiable=row["start_negotiable"],
+                period_value=row["period_value"],
+                period_unit=row["period_unit"],
             )
             for row in rows
         }

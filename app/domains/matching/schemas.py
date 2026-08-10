@@ -14,7 +14,9 @@ class MatchingRequest(BaseModel):
 
 class RankedCandidate(BaseModel):
     freelancer_id: int
-    score: float = Field(..., description="0~1. 벡터 유사도와 LLM 판단을 합친 최종 점수")
+    # 스프링의 matching_candidate.base_score(NUMERIC(5,2), 0~100)에 그대로 저장되고,
+    # 50점 미만이 lowScoreWarned(적합도 낮음 경고) 기준이다. 범위를 바꾸면 양쪽을 함께 바꿔야 한다.
+    score: float = Field(..., description="0~100. LLM이 판단한 원점수(등급 가중치 반영 전)")
     reason: str = Field(
         ..., description='추천 사유. "|"로 이어붙인 문자열 — 스프링이 이 구분자로 다시 나눠 노출한다'
     )
