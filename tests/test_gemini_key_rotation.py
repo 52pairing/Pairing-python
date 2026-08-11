@@ -153,3 +153,46 @@ async def test_our_own_exception_is_not_retried(dummy_genai):
 
     assert calls == 1
     assert "차원" in exc_info.value.message
+
+
+async def test_invalid_response_is_retried_up_to_three_attempts(dummy_genai):
+    """명세: "LLM 응답 오류 시 재시도(3회) → 3회 실패하면 응답에 실패했음 표시".
+
+    응답이 비었거나 형식이 깨진 건 같은 키로 다시 부르면 성공할 수 있어서 재시도 대상이다.
+    (차원 불일치 같은 우리 쪽 오류는 위 테스트처럼 재시도하지 않는다 — 구분이 핵심)
+    """
+    client = gemini_module.GeminiClient(_settings("k1,k2"))
+    calls = 0
+
+    async def invalid(_inner):
+        nonlocal calls
+        calls += 1
+        raise AiException(AiErrorCode.LLM_RESPONSE_INVALID)
+
+    with pytest.raises(AiException) as exc_info:
+        await client._invoke(invalid, AiErrorCode.LLM_CALL_FAILED)
+
+    # 최초 1회 + 재시도 2회(gemini_max_retries 기본값) = 총 3회
+    assert calls == 3
+    # 소진 후에도 "호출 실패"가 아니라 "응답 오류"로 남아야 원인이 안 뒤바뀐다.
+    assert exc_info.value.error_code == AiErrorCode.LLM_RESPONSE_INVALID
+    # 응답 오류는 키 문제가 아니므로 키를 쿨다운에 넣지 않는다.
+    assert client._cooldown_until == [0.0, 0.0]
+
+
+async def test_invalid_response_succeeds_on_retry(dummy_genai):
+    """첫 응답이 비어도 재시도에서 정상 응답이 오면 성공으로 끝난다."""
+    client = gemini_module.GeminiClient(_settings("k1"))
+    calls = 0
+
+    async def flaky(_inner):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise AiException(AiErrorCode.LLM_RESPONSE_INVALID)
+        return "ok"
+
+    result, attempts = await client._invoke(flaky, AiErrorCode.LLM_CALL_FAILED)
+
+    assert result == "ok"
+    assert attempts == 2
