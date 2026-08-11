@@ -42,6 +42,11 @@ def _pay_unit_label(unit: str | None) -> str:
     return _PAY_UNIT_LABELS.get(unit, unit or "")
 
 
+# 1차 검색에서 후보가 0명일 때 풀을 몇 배로 넓혀 다시 찾을지. 직군/직무 같은 자격 조건은
+# 그대로 두고 유사도 순위 컷만 느슨하게 하는 용도라, 과하게 키우면 무관한 후보까지 LLM 에
+# 넘어가 비용만 는다.
+_RELAXED_POOL_MULTIPLIER = 3
+
 # 이 값 이하만 나오면 LLM 이 0~100 이 아닌 다른 스케일(0~1, 0~10)로 답했다고 본다.
 # 후보들은 이미 하드필터(직군/직무 일치)와 벡터 유사도 상위를 통과한 사람들이라, 전원이
 # 100점 만점에 10점 이하인 상황은 사실상 나오지 않는다.
@@ -130,6 +135,22 @@ class MatchingService:
         )
 
         if not pool.candidates:
+            # 조건 완화 후 재검색(명세: "조건 충족 후보 0명 → 조건 완화 후 재검색").
+            # **직군/직무는 그대로 둔다** — 백엔드 자리에 디자이너를 넣는 건 완화가 아니라 오추천이다.
+            # AI매칭 동의·일시중지·계정 상태도 사용자 의사라 못 푼다. 그래서 유일하게 완화할 수 있는
+            # 건 임베딩 유사도 범위(=풀 크기)뿐이다. 순위만 낮았을 뿐 조건은 맞는 후보를 더 끌어온다.
+            relaxed_size = pool_size * _RELAXED_POOL_MULTIPLIER
+            logger.info(
+                "후보 0명 → 임베딩 풀을 넓혀 재검색한다. position_id=%s, %d → %d",
+                position_id, pool_size, relaxed_size,
+            )
+            pool = await self._embedding_service.search_candidates(
+                position_id, relaxed_size, position.job_category, position.job_role,
+                excluded_freelancer_ids,
+            )
+
+        if not pool.candidates:
+            # 재검색도 0명 → 스프링이 MT_009로 받아 "재추천 안내"를 띄운다.
             raise AiException(AiErrorCode.CANDIDATE_POOL_EMPTY)
 
         freelancer_ids = [candidate.freelancer_id for candidate in pool.candidates]

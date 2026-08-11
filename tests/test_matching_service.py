@@ -332,6 +332,49 @@ async def test_recommend_allows_genuinely_low_score_when_scale_is_right():
 
 
 @pytest.mark.asyncio
+async def test_recommend_widens_pool_and_retries_when_first_search_is_empty():
+    """명세: "조건 충족 후보 0명 → 조건 완화 후 재검색". 직군/직무는 그대로 두고 풀만 넓힌다."""
+    service = _make_service({101: _profile(101)}, llm_response="{}")
+    empty = SimilaritySearchResponse(position_id=1, candidates=[])
+    found = SimilaritySearchResponse(
+        position_id=1, candidates=[SimilarFreelancer(freelancer_id=101, score=0.4)]
+    )
+    service._embedding_service.search_candidates = AsyncMock(side_effect=[empty, found])
+    service._gemini.generate_json_with_usage = AsyncMock(
+        return_value=(
+            '{"candidates": [{"freelancer_id": 101, "score": 55, "reason": "경력 충족"}]}',
+            GeminiUsage(model="gemini-3.5-flash", prompt_tokens=1, output_tokens=1,
+                        latency_ms=1, retry_count=0),
+        )
+    )
+
+    result = await service.recommend(position_id=1, recruit_count=2, pool_multiplier=3)
+
+    assert [c.freelancer_id for c in result.candidates] == [101]
+    first, second = service._embedding_service.search_candidates.await_args_list
+    # 1차 6명(2x3) → 재검색은 그 3배로 넓힌다.
+    assert first.args[1] == 6
+    assert second.args[1] == 18
+    # 직군/직무는 두 번 다 그대로여야 한다. 완화한다고 직무를 풀면 오추천이 된다.
+    assert first.args[2:4] == second.args[2:4] == ("DEVELOPMENT", "BACKEND")
+
+
+@pytest.mark.asyncio
+async def test_recommend_raises_pool_empty_when_relaxed_search_also_finds_nothing():
+    service = _make_service({101: _profile(101)}, llm_response="{}")
+    service._embedding_service.search_candidates = AsyncMock(
+        return_value=SimilaritySearchResponse(position_id=1, candidates=[])
+    )
+
+    with pytest.raises(AiException) as exc_info:
+        await service.recommend(position_id=1, recruit_count=2, pool_multiplier=3)
+
+    assert exc_info.value.error_code == AiErrorCode.CANDIDATE_POOL_EMPTY
+    # 완화 재검색까지 두 번은 시도해야 한다.
+    assert service._embedding_service.search_candidates.await_count == 2
+
+
+@pytest.mark.asyncio
 async def test_recommend_raises_not_found_when_position_missing():
     service = _make_service({101: _profile(101)}, llm_response="{}")
     service._directory_repository.find_position_requirement.return_value = None
