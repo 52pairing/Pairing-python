@@ -24,13 +24,32 @@ from app.domains.chatbot.schemas import AskRequest, AskResponse
 
 logger = logging.getLogger(__name__)
 
+# 답변과 이어지는 화면 코드. LLM 에게 URL 을 만들게 하면 없는 경로를 지어내므로,
+# 고를 수 있는 값을 여기서 닫아 둔다. 실제 경로 매핑은 스프링이 한다.
+_INTENTS = [
+    "RESUME_EDIT",
+    "PAYMENT_METHOD",
+    "MY_PROJECTS",
+    "INQUIRY_NEW",
+    "NONE",
+]
+
 _ANSWER_SCHEMA = {
     "type": "object",
     "properties": {
         "answer": {"type": "string"},
+        "intent": {"type": "string", "enum": _INTENTS},
     },
-    "required": ["answer"],
+    "required": ["answer", "intent"],
 }
+
+_INTENT_GUIDE = """
+- RESUME_EDIT: 이력서·포트폴리오 작성이나 수정을 안내할 때
+- PAYMENT_METHOD: 카드·계좌 등 결제수단 등록·변경을 안내할 때
+- MY_PROJECTS: 내 프로젝트나 내 계약의 진행 상황을 확인하라고 안내할 때
+- INQUIRY_NEW: 답할 수 없어 1:1 문의를 권할 때
+- NONE: 위에 해당하지 않거나 단순 설명으로 끝날 때
+"""
 
 # 초기 버전은 정책 요약을 프롬프트에 직접 박아 넣는다(RAG 없음). 정책이 바뀌면 여기를 갱신한다.
 _POLICY_CONTEXT = """
@@ -75,7 +94,17 @@ class ChatbotService:
         if not isinstance(answer, str) or not answer.strip():
             raise AiException(AiErrorCode.LLM_RESPONSE_INVALID, "답변이 비어 있습니다.")
 
-        return AskResponse(answer=answer.strip(), model=model)
+        return AskResponse(answer=answer.strip(), intent=self._read_intent(parsed), model=model)
+
+    @staticmethod
+    def _read_intent(parsed: dict) -> str:
+        """목록에 없는 값이면 NONE 으로 떨어뜨린다.
+
+        response_schema 의 enum 으로 이미 한 번 막지만, 모델이 어기는 경우가 있다. 여기서
+        걸러 두면 스프링이 매핑에 실패할 일이 없고, 최악이라도 버튼만 안 나온다.
+        """
+        intent = parsed.get("intent")
+        return intent if intent in _INTENTS else "NONE"
 
     async def _record_call(
         self,
@@ -116,6 +145,9 @@ class ChatbotService:
             "너는 '페어링' 플랫폼의 FAQ 챗봇이다. 아래 정책 범위 안에서만 한국어로 간결하게 답한다.\n"
             "정책에 없는 내용이거나 개인정보·법률·의료 등 답할 수 없는 질문이면, 아는 척하지 말고 "
             "1:1 문의를 이용해 달라고 안내한다.\n"
+            "answer 와 함께 intent 를 하나 고른다. 답변을 읽은 사용자가 바로 갈 만한 화면이 "
+            "있을 때만 고르고, 애매하면 NONE 을 쓴다. answer 안에 링크나 경로를 쓰지 않는다.\n"
+            f"[intent]\n{_INTENT_GUIDE}\n"
             f"[정책]\n{_POLICY_CONTEXT}\n"
             f"[질문]\n{question}"
         )
