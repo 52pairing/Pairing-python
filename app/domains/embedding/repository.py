@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
 
-from sqlalchemy import BigInteger, Boolean, String, column, select, table, text
+from sqlalchemy import BigInteger, Boolean, String, column, func, select, table, text
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -77,7 +77,12 @@ class EmbeddingRepository:
         await self._session.execute(
             stmt.on_conflict_do_update(
                 index_elements=[FreelancerEmbedding.freelancer_id],
-                set_={"embedding": vector, "model": model, "source_hash": source_hash},
+                set_={
+                    "embedding": vector,
+                    "model": model,
+                    "source_hash": source_hash,
+                    "updated_at": func.current_timestamp(),
+                },
             )
         )
 
@@ -90,7 +95,12 @@ class EmbeddingRepository:
         await self._session.execute(
             stmt.on_conflict_do_update(
                 index_elements=[PositionEmbedding.position_id],
-                set_={"embedding": vector, "model": model, "source_hash": source_hash},
+                set_={
+                    "embedding": vector,
+                    "model": model,
+                    "source_hash": source_hash,
+                    "updated_at": func.current_timestamp(),
+                },
             )
         )
 
