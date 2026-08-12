@@ -244,8 +244,15 @@ class MatchingService:
             raise AiException(AiErrorCode.LLM_RESPONSE_INVALID) from exc
 
         # LLM 이 후보 풀에 없는 ID 를 지어낼 수 있다. 풀 밖의 값은 버린다.
-        allowed = set(freelancer_ids)
-        filtered = [candidate for candidate in candidates if candidate.freelancer_id in allowed]
+        # 남은 후보에는 1차 추림에서 계산한 코사인 유사도를 붙여 보낸다 — LLM 이 만든 값이 아니라
+        # 우리가 계산한 값이라 여기서 채워야 한다(프롬프트에는 안 넣는다: 넣으면 LLM 이 원문을
+        # 읽는 대신 그 숫자를 베낀다). 스프링이 matching_candidate.similarity 에 그대로 저장한다.
+        similarity_by_id = {item.freelancer_id: item.similarity for item in top}
+        filtered = [
+            candidate.model_copy(update={"similarity": similarity_by_id[candidate.freelancer_id]})
+            for candidate in candidates
+            if candidate.freelancer_id in similarity_by_id
+        ]
 
         # 스케일 검증은 **풀 밖 후보를 버린 뒤에** 한다. 지어낸 후보가 정상 점수(95)를 달고 오면
         # 최고점이 그 값으로 잡혀서, 정작 실제로 넘어갈 후보가 0.95 여도 검증을 통과해 버린다.

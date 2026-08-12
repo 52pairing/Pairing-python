@@ -445,3 +445,64 @@ async def test_recommend_passes_budget_cap_through_to_prompt():
 
     sent_prompt = service._gemini.generate_json_with_usage.await_args.args[1]
     assert "1인 월단가 상한: 4500000원" in sent_prompt
+
+
+@pytest.mark.asyncio
+async def test_response_carries_similarity_from_first_stage():
+    """유사도는 LLM 이 만드는 값이 아니라 **서버가 1차 추림에서 계산한 값**이다.
+
+    스프링이 `matching_candidate.similarity`(numeric(6,4))에 그대로 저장한다. 지금까지 그 컬럼엔
+    0.0 이 박혀 있어서 "이 후보가 왜 뽑혔나"를 나중에 되짚을 수 없었다.
+    """
+    llm_response = '{"candidates": [{"freelancer_id": 101, "score": 88, "reason": "경력 충족"}]}'
+    service = _make_service({101: _profile(101)}, llm_response=llm_response)
+    service._embedding_service.search_scored_candidates = AsyncMock(
+        return_value=[_condition_row(101, similarity=0.7321)]
+    )
+
+    result = await service.recommend(position_id=1, recruit_count=1, pool_multiplier=3)
+
+    [candidate] = result.candidates
+    assert candidate.similarity == pytest.approx(0.7321)
+    # LLM 이 준 점수는 그대로 남아야 한다(유사도로 덮어쓰지 않는다).
+    assert candidate.score == 88
+
+
+@pytest.mark.asyncio
+async def test_similarity_is_not_leaked_into_the_prompt():
+    """프롬프트에 유사도를 넣으면 LLM 이 원문을 읽는 대신 그 숫자를 베낀다.
+
+    1차 추림 점수를 다시 확인하는 셈이라 새로 알아내는 게 없다 — LLM 은 원문을 직접 읽고
+    자기 판단으로 점수를 새로 매겨야 한다(기존 원칙).
+    """
+    llm_response = '{"candidates": [{"freelancer_id": 101, "score": 88, "reason": "경력 충족"}]}'
+    service = _make_service({101: _profile(101)}, llm_response=llm_response)
+    service._embedding_service.search_scored_candidates = AsyncMock(
+        return_value=[_condition_row(101, similarity=0.7321)]
+    )
+
+    await service.recommend(position_id=1, recruit_count=1, pool_multiplier=3)
+
+    sent_prompt = service._gemini.generate_json_with_usage.await_args.args[1]
+    assert "0.7321" not in sent_prompt
+
+
+@pytest.mark.asyncio
+async def test_hallucinated_candidate_is_dropped_before_similarity_lookup():
+    """풀에 없는 ID 를 LLM 이 지어내면 유사도를 붙일 수 없다 — 붙이기 전에 걸러져야 한다.
+
+    (걸러지지 않으면 KeyError 로 추천 전체가 500 이 된다.)
+    """
+    llm_response = (
+        '{"candidates": ['
+        '{"freelancer_id": 101, "score": 88, "reason": "경력 충족"},'
+        '{"freelancer_id": 999, "score": 95, "reason": "지어낸 후보"}]}'
+    )
+    service = _make_service({101: _profile(101)}, llm_response=llm_response)
+    service._embedding_service.search_scored_candidates = AsyncMock(
+        return_value=[_condition_row(101, similarity=0.5)]
+    )
+
+    result = await service.recommend(position_id=1, recruit_count=1, pool_multiplier=3)
+
+    assert [c.freelancer_id for c in result.candidates] == [101]

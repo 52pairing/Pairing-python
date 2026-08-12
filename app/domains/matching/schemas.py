@@ -28,6 +28,16 @@ class RankedCandidate(BaseModel):
     reason: str = Field(
         ..., description='추천 사유. "|"로 이어붙인 문자열 — 스프링이 이 구분자로 다시 나눠 노출한다'
     )
+    # LLM 이 만드는 값이 아니라 **서버가 1차 추림에서 계산해 채워 넣는 값**이다(_RANKING_SCHEMA 에
+    # 넣지 않는 이유). LLM 응답을 이 모델로 파싱하는 단계에서는 비어 있으므로 기본값이 None 이고,
+    # 풀 밖 후보를 걸러낸 뒤 실제 값으로 덮어쓴다.
+    #
+    # 스프링 matching_candidate.similarity(numeric(6,4)) 에 그대로 저장된다. 지금까지 그 컬럼엔
+    # 0.0 이 박혀 있어서 "이 후보가 왜 뽑혔나"를 나중에 되짚을 수 없었다.
+    similarity: float | None = Field(
+        default=None,
+        description="코사인 유사도(-1~1, 텍스트 임베딩이라 실제로는 0~1 부근). 순위 환산 전 원본값",
+    )
 
 
 class MatchingResponse(BaseModel):

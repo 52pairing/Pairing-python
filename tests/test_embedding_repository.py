@@ -158,12 +158,18 @@ async def test_search_scored_candidates_against_real_db():
     - 빈 리스트 파라미터(`excluded_ids=[]`)가 asyncpg 타입 추론을 통과하는지
     - LATERAL 조인이 요구 스킬 밖의 보유 스킬을 빼는지
 
-    실행 방법(임시 컨테이너):
+    CI 가 pgvector 서비스를 띄우고 `AI_TEST_DB_URL` 을 넣어주므로 **PR 마다 자동으로 돈다.**
+    로컬에서 돌리려면 임시 컨테이너를 쓴다:
+
         docker run -d --rm --name pgv -p 55432:5432 -e POSTGRES_PASSWORD=x \
             -e POSTGRES_DB=t pgvector/pgvector:pg16
-        # 아래 _create_fixture_schema 가 만드는 테이블은 스프링 소유(ddl-auto)라
-        # 실제 스키마와 어긋날 수 있다. 컬럼 추가 시 같이 손봐야 한다.
         AI_TEST_DB_URL=postgresql+asyncpg://postgres:x@localhost:55432/t pytest -k real_db
+
+    **개발 DB 를 가리켜도 안전하다.** 픽스처는 전용 스키마(`pgvector_it`)를 만들어 그 안에서만
+    테이블을 만들고 끝나면 통째로 지운다 — public 의 실제 테이블(스프링 소유)은 안 건드린다.
+
+    한계: 픽스처 테이블 정의는 손으로 적은 것이고 실제 스키마는 스프링 `ddl-auto` 가 만든다.
+    **스프링 엔티티에 컬럼이 늘면 여기도 같이 고쳐야 한다.** 안 고치면 옛 스키마로 계속 통과한다.
     """
     from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
@@ -172,37 +178,62 @@ async def test_search_scored_candidates_against_real_db():
     try:
         async with session_factory() as session:
             await _create_fixture_schema(session)
-            repo = EmbeddingRepository(session)
-            vector = [0.1] * 768
-
-            matched = await repo.search_scored_candidates(
-                vector, "DEVELOPMENT", "BACKEND", ["SPRING_BOOT", "POSTGRESQL"], None
-            )
-            assert [c.freelancer_id for c in matched] == [1]
-            # REACT 는 요구 스킬 밖이라 숙련도 목록에 들어오면 안 된다(들어오면 일치율이 부풀려진다).
-            assert matched[0].matched_skill_levels == ["ADVANCED"]
-
-            assert await repo.search_scored_candidates(
-                vector, "DEVELOPMENT", "BACKEND", ["FIGMA"], None
-            ) == []
-
-            relaxed = await repo.search_scored_candidates(vector, "DEVELOPMENT", "BACKEND", [], [])
-            assert [c.freelancer_id for c in relaxed] == [1]
-
-            assert await repo.search_scored_candidates(
-                vector, "DEVELOPMENT", "BACKEND", ["SPRING_BOOT"], [1]
-            ) == []
+            try:
+                await _assert_scored_search_behaviour(session)
+            finally:
+                await _drop_fixture_schema(session)
     finally:
         await engine.dispose()
+
+
+async def _assert_scored_search_behaviour(session) -> None:
+    repo = EmbeddingRepository(session)
+    vector = [0.1] * 768
+
+    matched = await repo.search_scored_candidates(
+        vector, "DEVELOPMENT", "BACKEND", ["SPRING_BOOT", "POSTGRESQL"], None
+    )
+    assert [c.freelancer_id for c in matched] == [1]
+    # REACT 는 요구 스킬 밖이라 숙련도 목록에 들어오면 안 된다(들어오면 일치율이 부풀려진다).
+    assert matched[0].matched_skill_levels == ["ADVANCED"]
+    # 유사도가 실제로 계산돼 나오는지 — 스프링이 이 값을 matching_candidate.similarity 에 저장한다.
+    assert matched[0].similarity == pytest.approx(1.0, abs=1e-6)
+
+    assert await repo.search_scored_candidates(
+        vector, "DEVELOPMENT", "BACKEND", ["FIGMA"], None
+    ) == []
+
+    relaxed = await repo.search_scored_candidates(vector, "DEVELOPMENT", "BACKEND", [], [])
+    assert [c.freelancer_id for c in relaxed] == [1]
+
+    assert await repo.search_scored_candidates(
+        vector, "DEVELOPMENT", "BACKEND", ["SPRING_BOOT"], [1]
+    ) == []
+
+
+# 픽스처 전용 스키마. public 에 만들면 **개발 DB 를 가리켰을 때 실제 테이블이 날아간다**
+# (account, freelancer_profile 등은 스프링 소유다).
+_FIXTURE_SCHEMA = "pgvector_it"
+
+
+async def _drop_fixture_schema(session) -> None:
+    from sqlalchemy import text
+
+    await session.execute(text(f"DROP SCHEMA IF EXISTS {_FIXTURE_SCHEMA} CASCADE"))
+    await session.commit()
 
 
 async def _create_fixture_schema(session) -> None:
     from sqlalchemy import text
 
     for statement in (
+        # 확장은 public 에 둔다. 스키마마다 만들 필요가 없고, 이미 있으면 건너뛴다.
         "CREATE EXTENSION IF NOT EXISTS vector",
-        "DROP TABLE IF EXISTS freelancer_embedding, freelancer_profile, account,"
-        " freelancer_condition, condition_skill",
+        f"DROP SCHEMA IF EXISTS {_FIXTURE_SCHEMA} CASCADE",
+        f"CREATE SCHEMA {_FIXTURE_SCHEMA}",
+        # 리포지토리 SQL 은 테이블명을 스키마 없이 쓰므로, 이 세션의 search_path 만 돌려두면
+        # 그대로 픽스처 테이블을 본다. public 은 vector 타입 때문에 뒤에 남겨둔다.
+        f"SET search_path TO {_FIXTURE_SCHEMA}, public",
         "CREATE TABLE freelancer_embedding (freelancer_id bigint PRIMARY KEY, embedding vector(768))",
         "CREATE TABLE freelancer_profile (id bigint, account_id bigint,"
         " ai_matching_agreed boolean, matching_paused boolean)",
