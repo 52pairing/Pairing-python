@@ -1,7 +1,7 @@
 """조건점수 채점식 검증. DB도 LLM도 안 쓴다 — 순수 함수라 숫자를 직접 확인할 수 있다.
 
-기준은 백엔드 레포 `.ai/STATE.md` "[2][3] 임베딩 30 + 조건점수 70" 표다. 그 표의 검산 예시를
-그대로 테스트로 옮겨서, 표와 코드가 어긋나면 여기서 걸리게 한다.
+기준은 백엔드 레포 `.ai/STATE.md` "[2][3] 임베딩 25 + 조건점수 75" 표다. 배점은 합 100,
+최종 비중은 25:75 로 2026-08-12 확정. 표와 코드가 어긋나면 여기서 걸리게 한다.
 """
 
 from datetime import date
@@ -18,8 +18,8 @@ from app.domains.matching.scoring import (
     score_candidates,
 )
 
-# 조건점수 원점수 만점. 25+15+15+8+7+5+5.
-_CONDITION_MAX = 80.0
+# 조건점수 만점. 30+20+20+10+8+6+6 = 100 (2026-08-12 확정).
+_CONDITION_MAX = 100.0
 
 
 def _position(**overrides) -> PositionCondition:
@@ -57,7 +57,7 @@ def _candidate(freelancer_id: int = 1, **overrides) -> CandidateCondition:
 
 
 def _raw(position: PositionCondition, candidate: CandidateCondition) -> float:
-    """0~1 로 나온 조건점수를 원점수(0~80)로 되돌린다. 표와 직접 비교하려고."""
+    """0~1 로 나온 조건점수를 배점(0~100)으로 되돌린다. 표와 직접 비교하려고."""
     return condition_score(position, candidate) * _CONDITION_MAX
 
 
@@ -65,11 +65,11 @@ def test_all_conditions_met_scores_full_marks():
     assert _raw(_position(), _candidate()) == pytest.approx(_CONDITION_MAX)
 
 
-# --- 스킬 25점 -------------------------------------------------------------
+# --- 스킬 30점 -------------------------------------------------------------
 
 
 def test_skill_count_beats_proficiency():
-    """STATE.md 검산: 5/5 전부 초급(20점) > 3/5 전부 고급(15점).
+    """STATE.md 검산: 5/5 전부 초급(24점) > 3/5 전부 고급(18점).
 
     숙련도는 보너스이지 필수 조건이 아니다 — position_skill 에 요구 숙련도 컬럼이 없어서
     프로젝트가 "Java 고급 필요"를 표현할 방법 자체가 없다. 그래서 개수가 이겨야 한다.
@@ -77,10 +77,10 @@ def test_skill_count_beats_proficiency():
     all_beginner = _candidate(matched_skill_levels=("BEGINNER",) * 5)
     three_advanced = _candidate(matched_skill_levels=("ADVANCED",) * 3)
 
-    # 25 x 1.0 x (0.8 + 0.2x0.0) = 20
-    assert _raw(_position(), all_beginner) - _raw(_position(), _candidate()) == pytest.approx(-5.0)
-    # 25 x 0.6 x (0.8 + 0.2x1.0) = 15
-    assert _raw(_position(), three_advanced) - _raw(_position(), _candidate()) == pytest.approx(-10.0)
+    # 30 x 1.0 x (0.8 + 0.2x0.0) = 24
+    assert _raw(_position(), all_beginner) - _raw(_position(), _candidate()) == pytest.approx(-6.0)
+    # 30 x 0.6 x (0.8 + 0.2x1.0) = 18
+    assert _raw(_position(), three_advanced) - _raw(_position(), _candidate()) == pytest.approx(-12.0)
 
     assert condition_score(_position(), all_beginner) > condition_score(_position(), three_advanced)
 
@@ -88,7 +88,7 @@ def test_skill_count_beats_proficiency():
 def test_no_matched_skill_scores_zero_for_skills():
     """스킬 0개는 하드필터에서 걸리지만, 완화 재검색으로 들어올 수 있다."""
     none_matched = _candidate(matched_skill_levels=())
-    assert _raw(_position(), none_matched) == pytest.approx(_CONDITION_MAX - 25.0)
+    assert _raw(_position(), none_matched) == pytest.approx(_CONDITION_MAX - 30.0)
 
 
 def test_position_without_required_skills_gives_everyone_full_skill_score():
@@ -97,16 +97,18 @@ def test_position_without_required_skills_gives_everyone_full_skill_score():
     assert _raw(position, _candidate(matched_skill_levels=())) == pytest.approx(_CONDITION_MAX)
 
 
-# --- 경력 15점 -------------------------------------------------------------
+# --- 경력 20점 -------------------------------------------------------------
 
 
 def test_career_shortfall_is_prorated():
-    """STATE.md 검산: 요구 3년·보유 1년 = 5점."""
-    assert _raw(_position(), _candidate(career_years=1)) == pytest.approx(_CONDITION_MAX - 10.0)
+    """요구 3년·보유 1년 = 20 x 1/3 = 6.67점."""
+    assert _raw(_position(), _candidate(career_years=1)) == pytest.approx(
+        _CONDITION_MAX - 20.0 * 2 / 3
+    )
 
 
 def test_extra_career_years_get_no_bonus():
-    """요구 3년에 10년차나 3년차나 같은 15점이다.
+    """요구 3년에 10년차나 3년차나 같은 20점이다.
 
     가점하면 예산만 비싼 고연차가 항상 앞에 선다. "3년이면 충분한데 10년차가 더 나은가"는
     프로젝트 성격에 달린 판단이라 LLM(Stage E)에 맡긴다.
@@ -116,21 +118,21 @@ def test_extra_career_years_get_no_bonus():
     )
 
 
-# --- 단가 15점 -------------------------------------------------------------
+# --- 단가 20점 -------------------------------------------------------------
 
 
 def test_pay_over_cap_is_prorated_by_excess_ratio():
-    """STATE.md 검산: cap 900만·희망 1,100만 = 11.7점. 초과율 2/9 → 15 x (1-0.2222)."""
+    """cap 900만·희망 1,100만. 초과율 2/9 → 20 x (1-0.2222) = 15.56점."""
     over = _candidate(pay_amount=Decimal("11000000"))
-    expected_pay = 15.0 * (1 - (11_000_000 - 9_000_000) / 9_000_000)
-    assert expected_pay == pytest.approx(11.666, abs=0.01)
-    assert _raw(_position(), over) == pytest.approx(_CONDITION_MAX - 15.0 + expected_pay)
+    expected_pay = 20.0 * (1 - (11_000_000 - 9_000_000) / 9_000_000)
+    assert expected_pay == pytest.approx(15.555, abs=0.01)
+    assert _raw(_position(), over) == pytest.approx(_CONDITION_MAX - 20.0 + expected_pay)
 
 
 def test_pay_far_over_cap_floors_at_zero():
     """초과율이 100%를 넘으면 음수가 되므로 0에서 멈춰야 한다."""
     assert _raw(_position(), _candidate(pay_amount=Decimal("99000000"))) == pytest.approx(
-        _CONDITION_MAX - 15.0
+        _CONDITION_MAX - 20.0
     )
 
 
@@ -184,18 +186,18 @@ def test_pay_amount_is_stored_in_won_not_ten_thousand_won():
 
 def test_missing_budget_cap_skips_pay_scoring():
     """budget_cap 이 없으면(옛 스프링 배포) 기준이 없다. 0점을 주면 조건 총합만 낮아져
-    유사도 30의 비중이 커진다. 만점을 줘서 항목을 빼는 것과 같게 만든다."""
+    유사도의 비중이 상대적으로 커진다. 만점을 줘서 항목을 빼는 것과 같게 만든다."""
     position = _position(budget_cap=None)
     assert _raw(position, _candidate(pay_amount=Decimal("99000000"))) == pytest.approx(
         _CONDITION_MAX
     )
 
 
-# --- 근무방식 8 / 근무형태 7 -------------------------------------------------
+# --- 근무방식 10 / 근무형태 8 ------------------------------------------------
 
 
-def test_work_style_mismatch_loses_all_eight_points():
-    assert _raw(_position(), _candidate(work_style="ONSITE")) == pytest.approx(_CONDITION_MAX - 8.0)
+def test_work_style_mismatch_loses_all_ten_points():
+    assert _raw(_position(), _candidate(work_style="ONSITE")) == pytest.approx(_CONDITION_MAX - 10.0)
 
 
 def test_any_matches_everything_on_either_side():
@@ -205,12 +207,12 @@ def test_any_matches_everything_on_either_side():
     )
 
 
-# --- 시작일 5 --------------------------------------------------------------
+# --- 시작일 6 --------------------------------------------------------------
 
 
 def test_late_start_is_prorated_over_sixty_days():
-    late = _candidate(available_from=date(2026, 10, 1))  # 30일 지연
-    assert _raw(_position(), late) == pytest.approx(_CONDITION_MAX - 2.5)
+    late = _candidate(available_from=date(2026, 10, 1))  # 30일 지연 -> 6점의 절반
+    assert _raw(_position(), late) == pytest.approx(_CONDITION_MAX - 3.0)
 
 
 def test_negotiable_start_date_is_never_penalized():
@@ -224,11 +226,11 @@ def test_negotiable_start_date_is_never_penalized():
     )
 
 
-# --- 기간 5 ----------------------------------------------------------------
+# --- 기간 6 ----------------------------------------------------------------
 
 
 def test_shorter_period_is_prorated():
-    assert _raw(_position(), _candidate(period_value=3)) == pytest.approx(_CONDITION_MAX - 2.5)
+    assert _raw(_position(), _candidate(period_value=3)) == pytest.approx(_CONDITION_MAX - 3.0)
 
 
 def test_weeks_are_converted_to_months_at_four_weeks_per_month():
@@ -242,12 +244,12 @@ def test_missing_period_is_treated_as_negotiable():
     assert _raw(_position(), _candidate(period_value=None)) == pytest.approx(_CONDITION_MAX)
 
 
-# --- 합산 30:70 ------------------------------------------------------------
+# --- 합산 25:75 ------------------------------------------------------------
 
 
-def test_similarity_uses_full_thirty_point_range_regardless_of_distribution():
-    """코사인 유사도는 0.55~0.85 같은 좁은 구간에 몰린다. 그대로 x30 하면 변동폭이 9점뿐이라
-    조건점수가 순위를 100% 결정한다. 순위 기반이면 분포와 무관하게 0~30을 다 쓴다."""
+def test_similarity_uses_its_full_range_regardless_of_distribution():
+    """코사인 유사도는 0.55~0.85 같은 좁은 구간에 몰린다. 그대로 곱하면 변동폭이 몇 점뿐이라
+    조건점수가 순위를 100% 결정한다. 순위 기반이면 분포와 무관하게 배점 전체를 쓴다."""
     candidates = [
         _candidate(1, similarity=0.55),
         _candidate(2, similarity=0.70),
@@ -268,13 +270,9 @@ def test_good_conditions_beat_high_similarity():
     조건이 나쁜 사람. 조건이 70점을 쥐고 있으므로 전자가 이겨야 한다.
     """
     perfect_conditions = _candidate(1, similarity=0.50)
+    # 스킬 1/5 초급 + 경력 1/3년 = 조건 38.5% 손실. 33.3% 를 넘으므로 유사도로 못 뒤집는다.
     high_similarity_only = _candidate(
-        2,
-        similarity=0.95,
-        matched_skill_levels=("BEGINNER",),
-        career_years=1,
-        work_style="ONSITE",
-        pay_amount=Decimal("20000000"),
+        2, similarity=0.95, matched_skill_levels=("BEGINNER",), career_years=1
     )
 
     ranked = score_candidates(_position(), [perfect_conditions, high_similarity_only])
@@ -283,24 +281,28 @@ def test_good_conditions_beat_high_similarity():
 
 
 def test_similarity_can_outweigh_a_moderate_condition_gap():
-    """30:70 의 실제 경계. 유사도 30점은 **조건 원점수 34점(=70x34/80)** 까지 뒤집는다.
+    """25:75 의 실제 경계. 유사도가 뒤집을 수 있는 조건 격차 = 25 / 75 = **33.3%** 다.
 
-    스킬 1/5·경력 1년(요구 3년)이면 조건 원점수가 80 → 49 로 31점 깎이는데, 그래도 유사도
-    1등이면 이긴다. "조건 70이니 조건이 항상 이긴다"가 아니라는 뜻이다 — 설계상 의도된
-    동작이지만 직관과 어긋나므로 숫자로 박아둔다. 이게 과하다고 판단되면 30:70 비중이나
-    순위 기반 정규화를 손봐야 하고, 그때 이 테스트가 먼저 깨진다.
+    스킬 1/5(중급)·경력 2년(요구 3년)이면 조건이 100 → 68.7 로 31.3% 깎이는데, 33.3% 안이라
+    유사도 1등이면 아직 이긴다. "조건 75니까 조건이 항상 이긴다"가 아니라는 뜻이다.
+
+    **이 케이스는 착수 전에 알고 받아들인 것이다**(2026-08-12). 여유가 2%p 뿐이라 배점을
+    조금만 손대도 결과가 뒤집히므로, 숫자로 박아둔다. 실제 추천 품질에서 "스킬 거의 없는데
+    글만 잘 맞는 후보"가 눈에 띄면 비중을 20:80 으로 조이면 되고, 그때 이 테스트가 먼저 깨진다.
     """
     good_conditions = _candidate(1, similarity=0.50)
     high_similarity = _candidate(
-        2, similarity=0.95, matched_skill_levels=("BEGINNER",), career_years=1
+        2, similarity=0.95, matched_skill_levels=("INTERMEDIATE",), career_years=2
     )
 
     ranked = score_candidates(_position(), [good_conditions, high_similarity])
 
     assert [item.freelancer_id for item in ranked] == [2, 1]
-    # 뒤집히는 지점: 조건 격차 x (70/80) < 유사도 격차 30
+    # 조건 격차 31.3% x 75 = 23.5점 < 유사도 격차 25점 → 유사도가 이긴다(여유 1.5점).
+    condition_gap = _CONDITION_MAX - _raw(_position(), high_similarity)
+    assert condition_gap == pytest.approx(31.27, abs=0.01)
     assert ranked[0].total_score - ranked[1].total_score == pytest.approx(
-        30.0 - (80.0 - 49.0) * CONDITION_WEIGHT / _CONDITION_MAX
+        SIMILARITY_WEIGHT - condition_gap * CONDITION_WEIGHT / _CONDITION_MAX
     )
 
 

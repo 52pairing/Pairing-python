@@ -19,28 +19,39 @@ from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
 
-# 조건점수 항목별 배점(원점수). 합계는 _CONDITION_MAX 이고, 최종 합산 때 70점으로 환산된다.
-# 배점 비율은 팀 확정값이다(U6). 바꾸려면 STATE.md [3] 표와 같이 고쳐야 한다.
-_SKILL_MAX = 25.0
-_CAREER_MAX = 15.0
-_PAY_MAX = 15.0
-_WORK_STYLE_MAX = 8.0
-_WORK_FORM_MAX = 7.0
-_START_DATE_MAX = 5.0
-_PERIOD_MAX = 5.0
+# 조건점수 항목별 배점. **합이 정확히 100이다**(2026-08-12 확정).
+# 정규화하면 절대값은 의미가 없고 항목 간 비율만 남는데, 100으로 맞춰두면 "스킬이 전체의 30%"가
+# 바로 읽힌다. 원래 표는 합이 80인데 문서에 70이라고 적혀 있어서(시작일·기간이 나중에 붙으며
+# 재검산이 빠졌다) 계속 혼란을 만들었다 — 100으로 두면 그 문제가 원인부터 사라진다.
+# 바꾸려면 STATE.md [3] 표와 같이 고쳐야 한다.
+_SKILL_MAX = 30.0
+_CAREER_MAX = 20.0
+_PAY_MAX = 20.0
+_WORK_STYLE_MAX = 10.0
+_WORK_FORM_MAX = 8.0
+_START_DATE_MAX = 6.0
+_PERIOD_MAX = 6.0
 _CONDITION_MAX = (
     _SKILL_MAX + _CAREER_MAX + _PAY_MAX + _WORK_STYLE_MAX + _WORK_FORM_MAX
     + _START_DATE_MAX + _PERIOD_MAX
 )
 
-# 최종 합산 비중. "임베딩 30 : 조건 70"(팀 확정).
-SIMILARITY_WEIGHT = 30.0
-CONDITION_WEIGHT = 70.0
+# 최종 합산 비중. "임베딩 25 : 조건 75"(2026-08-12 확정. 원안 30:70에서 조정).
+#
+# 이 비율이 정하는 건 **유사도가 뒤집을 수 있는 조건 격차 = S / (100 - S)** 다.
+# 25:75 면 33.3% — 조건이 33% 이상 나쁜 후보는 유사도 1등이어도 못 이긴다.
+# (30:70 이면 42.9% 까지 뒤집혀서, 스킬 1/5 + 경력 미달인 후보가 자기소개만으로 올라왔다.)
+#
+# 임베딩 비중을 낮춰도 의미 적합도 판단 자체는 죽지 않는다 — LLM(Stage E)이 자기소개·경력사항
+# 원문과 담당업무·업무범위·우대사항 원문을 직접 읽고 다시 판단한다. 1차 추림에서 임베딩이 하는
+# 일은 "적합도 채점"이 아니라 **"LLM 에게 보낼 3N 명을 싸게 고르는 것"** 이다.
+SIMILARITY_WEIGHT = 25.0
+CONDITION_WEIGHT = 75.0
 
 # 숙련도 보너스: 일치율에 (0.8 + 0.2 x 평균숙련도)를 곱한다. 숙련도는 보너스이지 필수 조건이
 # 아니다 — position_skill 에 요구 숙련도 컬럼이 없어서 프로젝트가 "Java 고급 필요"를 표현할
 # 방법이 아예 없기 때문이다. 그래서 개수가 이기게 설계했다:
-#   5/5 전부 초급 = 25 x 1.0 x 0.8 = 20점  >  3/5 전부 고급 = 25 x 0.6 x 1.0 = 15점
+#   5/5 전부 초급 = 30 x 1.0 x 0.8 = 24점  >  3/5 전부 고급 = 30 x 0.6 x 1.0 = 18점
 _SKILL_LEVEL_BASE = 0.8
 _SKILL_LEVEL_BONUS = 0.2
 _SKILL_LEVEL_VALUES = {"BEGINNER": 0.0, "INTERMEDIATE": 0.5, "ADVANCED": 1.0}
@@ -216,7 +227,7 @@ def _score_period(position: PositionCondition, candidate: CandidateCondition) ->
 
 
 def condition_score(position: PositionCondition, candidate: CandidateCondition) -> float:
-    """조건점수를 0~1 로 돌려준다. 항목별 원점수 합계를 만점으로 나눈 값이다."""
+    """조건점수를 0~1 로 돌려준다. 항목별 점수 합계(0~100)를 100 으로 나눈 값이다."""
     raw = (
         _score_skills(position, candidate)
         + _score_career(position, candidate)
@@ -232,11 +243,12 @@ def condition_score(position: PositionCondition, candidate: CandidateCondition) 
 def _percent_ranks(similarities: list[float]) -> list[float]:
     """유사도를 순위 기반 0~1 로 편다. SQL 의 PERCENT_RANK 와 같은 정의다.
 
-    코사인 유사도는 0.55~0.85 같은 좁은 구간에 몰려서, 그냥 x30 하면 "고정 보너스 16점 +
-    변동 9점"이 되어 **조건점수가 순위를 100% 결정**한다. 30:70 이라는 비중이 무의미해진다.
-    순위로 펴면 분포가 어떻든 항상 0~30 전체를 쓰고, 정규화 상수를 실측할 필요도 없다.
+    코사인 유사도는 0.55~0.85 같은 좁은 구간에 몰려서, 그냥 곱하면 "고정 보너스 + 작은 변동"이
+    되어 **조건점수가 순위를 100% 결정**한다. 비중을 나눈 의미가 사라진다. 순위로 펴면 분포가
+    어떻든 항상 0~25 전체를 쓰고, 정규화 상수를 실측할 필요도 없다.
 
-    대가로 절대적 유사도 차이는 무시된다(1등과 2등이 거의 같아도 순위만큼 벌어진다).
+    대가로 절대적 유사도 차이는 무시된다 — 1등과 꼴찌의 코사인이 0.84 대 0.83 이어도 25점 차가
+    난다. **유사도가 실제보다 세게 작동하는 원인이 여기다**(비중 자체보다 이 쪽 영향이 크다).
     후보가 1명이면 전원 0점인데, 그때는 순위를 매길 대상이 없으니 문제가 되지 않는다.
     """
     count = len(similarities)
