@@ -119,7 +119,7 @@ class DirectoryRepository:
                 text(
                     """
                     SELECT fp.id AS freelancer_id, fc.job_category, fc.job_role, fc.career_years,
-                           fc.has_freelance_exp, r.self_introduction,
+                           fc.has_freelance_experience AS has_freelance_exp, r.self_introduction,
                            fc.pay_unit, fc.pay_amount, fc.work_style, fc.work_form,
                            fc.available_from, fc.start_negotiable, fc.period_value, fc.period_unit,
                            COALESCE(string_agg(
@@ -133,7 +133,7 @@ class DirectoryRepository:
                     LEFT JOIN resume_career rc ON rc.resume_id = r.id
                     WHERE fp.id = ANY(:freelancer_ids)
                     GROUP BY fp.id, fc.job_category, fc.job_role, fc.career_years,
-                             fc.has_freelance_exp, r.self_introduction,
+                             fc.has_freelance_experience, r.self_introduction,
                              fc.pay_unit, fc.pay_amount, fc.work_style, fc.work_form,
                              fc.available_from, fc.start_negotiable, fc.period_value, fc.period_unit
                     """
