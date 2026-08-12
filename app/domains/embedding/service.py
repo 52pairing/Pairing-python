@@ -13,7 +13,7 @@ from app.domains.ai_log.repository import (
     LogStatus,
     RefType,
 )
-from app.domains.embedding.repository import EmbeddingRepository
+from app.domains.embedding.repository import CandidateConditionRow, EmbeddingRepository
 from app.domains.embedding.schemas import (
     EmbeddingResponse,
     SimilarFreelancer,
@@ -133,4 +133,25 @@ class EmbeddingService:
         return SimilaritySearchResponse(
             position_id=position_id,
             candidates=[SimilarFreelancer(freelancer_id=fid, score=score) for fid, score in rows],
+        )
+
+    async def search_scored_candidates(
+        self,
+        position_id: int,
+        job_category: str,
+        job_role: str,
+        required_skills: list[str],
+        excluded_freelancer_ids: list[int] | None = None,
+    ) -> list[CandidateConditionRow]:
+        """하드필터 통과자 전원 + 채점용 조건 값. 자르지 않는다.
+
+        자르는 건 임베딩 30 + 조건점수 70 을 합산한 뒤 매칭 도메인이 한다.
+        """
+        vector = await self._repository.find_position_vector(position_id)
+        if vector is None:
+            # 포지션 임베딩을 아직 안 만든 상태. 스프링이 모집 시작 시 호출해야 한다.
+            raise AiException(AiErrorCode.EMBEDDING_NOT_FOUND)
+
+        return await self._repository.search_scored_candidates(
+            list(vector), job_category, job_role, required_skills, excluded_freelancer_ids
         )
