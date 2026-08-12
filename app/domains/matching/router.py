@@ -38,5 +38,6 @@ async def recommend(
         request.recruit_count,
         request.pool_multiplier,
         request.excluded_freelancer_ids,
+        request.budget_cap,
     )
     return ApiResponse.success("RECOMMENDATION_COMPLETED", "추천을 완료했습니다.", result)
