@@ -156,11 +156,16 @@ X-Trace-Id: a1b2c3d4
 
 | 메서드 | 경로 | 언제 호출 |
 | --- | --- | --- |
-| PUT | `/api/v1/embeddings/freelancers` | 이력서·조건 저장 시 |
-| PUT | `/api/v1/embeddings/positions` | 프로젝트 포지션 등록·수정 시 |
-| GET | `/api/v1/embeddings/positions/{id}/candidates?limit=` | 1차 후보 풀 조회 |
+| PUT | `/api/v1/embeddings/freelancers` | **이력서 정식 저장·수정 시** (임시저장은 제외) + 관리자 일괄 재색인 |
+| PUT | `/api/v1/embeddings/positions` | **착수금 결제 완료로 모집이 시작될 때** + 모집 시작 후 프로젝트 수정 시 |
+| GET | `/api/v1/embeddings/positions/{id}/candidates?limit=` | 1차 후보 풀 조회 (내부 확인용) |
 | POST | `/api/v1/matchings/recommendations` | 매칭 라운드 시작 시 |
 | POST | `/api/v1/contracts/draft-texts` | 협상 타결 후 계약서 생성 시 |
+
+> 임베딩 시점은 2026-08-11 팀 확정입니다. **조건(`freelancer_condition`) 저장은 임베딩과 무관합니다** —
+> 스킬·단가·근무조건이 전부 DB 조건점수로 가므로 조건을 바꿔도 벡터가 똑같이 나옵니다.
+> **프로젝트는 "등록 시점"이 아니라 "결제 완료"입니다** — 등록만 하고 결제하지 않은 프로젝트는
+> 추천이 시작되지 않아 임베딩 비용을 쓰지 않습니다.
 
 **`POST /matchings/recommendations`의 `budget_cap`은 스프링이 계산해서 넣어줍니다**(1인 월단가 상한,
 원 단위). AI 서버가 스스로 못 구하는 값입니다 — 순예산을 알려면 수수료율이 필요하고 그 수수료율은
