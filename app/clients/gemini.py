@@ -101,8 +101,12 @@ def _brief(exc: BaseException) -> str:
 
 
 def _classify(exc: BaseException) -> _Action:
-    # 우리가 던진 예외(차원 불일치 등)는 다시 시도해도 같은 결과다.
     if isinstance(exc, AiException):
+        # 응답이 비었거나 형식이 깨진 건 같은 키로 다시 부르면 성공할 수 있다. 명세가
+        # "LLM 응답 오류 시 재시도(3회), 3회 실패하면 실패 표시"를 요구하므로 재시도 대상이다.
+        if exc.error_code is AiErrorCode.LLM_RESPONSE_INVALID:
+            return _Action.RETRY
+        # 그 밖에 우리가 던진 예외(임베딩 차원 불일치 등)는 다시 시도해도 같은 결과다.
         return _Action.FAIL
 
     status = _status_of(exc)
@@ -224,11 +228,14 @@ class GeminiClient:
                 logger.warning("Gemini 일시 오류, %.1f초 뒤 재시도: %s", backoff, _brief(exc))
                 await asyncio.sleep(backoff)
 
-        code = (
-            timeout_code
-            if timeout_code is not None and isinstance(last_exc, TimeoutError)
-            else fallback
-        )
+        if timeout_code is not None and isinstance(last_exc, TimeoutError):
+            code = timeout_code
+        elif isinstance(last_exc, AiException):
+            # 응답 오류로 재시도하다 소진된 경우. fallback(호출 실패)로 덮으면 "왜 실패했나"가
+            # 뒤바뀐다 — 호출은 됐고 응답이 계속 이상했던 것이다.
+            code = last_exc.error_code
+        else:
+            code = fallback
         raise AiException(
             code,
             f"Gemini 호출이 실패했습니다. (키 {self._key_count}개, 시도 {attempts}회)",
