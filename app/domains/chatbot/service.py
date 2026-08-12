@@ -28,8 +28,12 @@ logger = logging.getLogger(__name__)
 # 고를 수 있는 값을 여기서 닫아 둔다. 실제 경로 매핑은 스프링이 한다.
 _INTENTS = [
     "RESUME_EDIT",
+    "PROJECT_CREATE",
     "PAYMENT_METHOD",
+    "SETTLEMENTS",
     "MY_PROJECTS",
+    "NEGOTIATION_LIST",
+    "CONTRACTS",
     "INQUIRY_NEW",
     "NONE",
 ]
@@ -44,11 +48,21 @@ _ANSWER_SCHEMA = {
 }
 
 _INTENT_GUIDE = """
-- RESUME_EDIT: 이력서·포트폴리오 작성이나 수정을 안내할 때
+- RESUME_EDIT: 이력서·포트폴리오 작성이나 수정을 안내할 때 (프리랜서 화면)
+- PROJECT_CREATE: 프로젝트 등록 방법을 안내할 때 (클라이언트 화면)
 - PAYMENT_METHOD: 카드·계좌 등 결제수단 등록·변경을 안내할 때
-- MY_PROJECTS: 내 프로젝트나 내 계약의 진행 상황을 확인하라고 안내할 때
-- INQUIRY_NEW: 답할 수 없어 1:1 문의를 권할 때
-- NONE: 위에 해당하지 않거나 단순 설명으로 끝날 때
+- SETTLEMENTS: 착수금·성공보수 등 수수료 금액이나 결제 내역을 안내할 때
+- MY_PROJECTS: 프로젝트 진행 상황, 매칭·추천·재추천을 안내할 때
+- NEGOTIATION_LIST: AI 대리인 협상의 진행·라운드·결렬을 안내할 때.
+  금액 제안·조건 변경처럼 챗봇이 대신 해줄 수 없는 협상 행위를 요청받았을 때도 이걸 고른다.
+- CONTRACTS: 계약서 작성·서명·계약 상태를 안내할 때
+- INQUIRY_NEW: 페어링 서비스에 관한 질문인데 정책 범위 밖이라 답할 수 없을 때
+- NONE: 위에 해당하지 않을 때. 단순 설명으로 끝나는 경우, 인사, 그리고
+  날씨·상식처럼 페어링 서비스와 무관한 질문도 여기에 해당한다.
+  (서비스와 무관한 질문에 1:1 문의를 권하면 안 된다)
+
+질문한 사람의 역할(클라이언트/프리랜서)은 알 수 없다. 내용만 보고 고르면 되고,
+역할에 맞지 않는 화면은 스프링이 걸러낸다.
 """
 
 # 초기 버전은 정책 요약을 프롬프트에 직접 박아 넣는다(RAG 없음). 정책이 바뀌면 여기를 갱신한다.
