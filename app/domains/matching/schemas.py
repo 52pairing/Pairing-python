@@ -10,6 +10,13 @@ class MatchingRequest(BaseModel):
         default_factory=list,
         description="같은 프로젝트에서 이미 후보로 노출됐던 freelancer_id 목록. 벡터 검색 전에 제외한다",
     )
+    # AI 서버가 스스로 못 구하는 값이라 스프링이 넘겨준다 — 순예산을 알려면 수수료율이 필요하고,
+    # 수수료율은 클라이언트 등급(account 도메인)에 걸려 있다. 여기서 계산하려 들면 등급 테이블까지
+    # 읽어야 하고, 스프링(BudgetCapCalculator)과 두 벌이 되어 조용히 어긋난다.
+    # None이면 단가 비교를 생략한다(옛 스프링 배포와 섞여 도는 동안).
+    budget_cap: int | None = Field(
+        default=None, ge=0, description="1인 월단가 상한(원). 순예산 ÷ 프로젝트 전체 인원 ÷ 개월 수"
+    )
 
 
 class RankedCandidate(BaseModel):

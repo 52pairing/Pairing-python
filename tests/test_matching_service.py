@@ -383,3 +383,60 @@ async def test_recommend_raises_not_found_when_position_missing():
         await service.recommend(position_id=1, recruit_count=1, pool_multiplier=3)
 
     assert exc_info.value.error_code == AiErrorCode.NOT_FOUND
+
+
+@pytest.mark.asyncio
+async def test_prompt_uses_budget_cap_as_monthly_rate_ceiling():
+    """budget_cap 이 오면 후보의 1인 월단가와 바로 비교하라고 지시한다."""
+    service = _make_service({101: _profile(101)}, llm_response="{}")
+
+    prompt = service._build_prompt(
+        _POSITION,
+        SimilaritySearchResponse(
+            position_id=1, candidates=[SimilarFreelancer(freelancer_id=101, score=0.9)]
+        ),
+        {101: _profile(101)},
+        recruit_count=1,
+        budget_cap=4_500_000,
+    )
+
+    assert "1인 월단가 상한: 4500000원" in prompt
+    # 시급/일급 후보도 같은 단위로 맞춰야 비교가 성립한다.
+    assert "209시간" in prompt
+    assert "21일" in prompt
+
+
+@pytest.mark.asyncio
+async def test_prompt_forbids_budget_comparison_when_cap_missing():
+    """budget_cap 이 없으면 프롬프트에 있는 건 총예산(전체 인원 x 전체 기간)뿐이다.
+
+    1인 월급과 자릿수가 달라서 그대로 비교하면 멀쩡한 후보가 전부 '예산 초과'로 감점된다.
+    옛 스프링 배포와 섞여 도는 동안 실제로 일어날 수 있는 조합이라 회귀로 남긴다.
+    """
+    service = _make_service({101: _profile(101)}, llm_response="{}")
+
+    prompt = service._build_prompt(
+        _POSITION,
+        SimilaritySearchResponse(
+            position_id=1, candidates=[SimilarFreelancer(freelancer_id=101, score=0.9)]
+        ),
+        {101: _profile(101)},
+        recruit_count=1,
+    )
+
+    assert "두 숫자를 직접 비교하지 마라" in prompt
+    assert "1인 월단가 상한:" not in prompt
+
+
+@pytest.mark.asyncio
+async def test_recommend_passes_budget_cap_through_to_prompt():
+    """라우터 → 서비스 → 프롬프트까지 값이 실제로 흘러가는지."""
+    llm_response = '{"candidates": [{"freelancer_id": 101, "score": 95, "reason": "경력 충족"}]}'
+    service = _make_service({101: _profile(101)}, llm_response=llm_response)
+
+    await service.recommend(
+        position_id=1, recruit_count=1, pool_multiplier=3, budget_cap=4_500_000
+    )
+
+    sent_prompt = service._gemini.generate_json_with_usage.await_args.args[1]
+    assert "1인 월단가 상한: 4500000원" in sent_prompt
