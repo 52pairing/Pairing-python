@@ -32,6 +32,7 @@ from app.domains.matching.schemas import MatchingResponse, RankedCandidate
 from app.domains.matching.scoring import (
     CandidateCondition,
     PositionCondition,
+    score_breakdown,
     score_candidates,
 )
 
@@ -80,6 +81,27 @@ def _to_candidate_condition(row: CandidateConditionRow) -> CandidateCondition:
         period_value=row.period_value,
         period_unit=row.period_unit,
     )
+
+
+def _row_debug(row: CandidateConditionRow) -> dict[str, object]:
+    return {
+        "freelancer_id": row.freelancer_id,
+        "similarity": round(row.similarity, 6),
+        "matched_skill_levels": row.matched_skill_levels,
+        "career_years": row.career_years,
+        "pay_unit": row.pay_unit,
+        "pay_amount": str(row.pay_amount) if row.pay_amount is not None else None,
+        "work_style": row.work_style,
+        "work_form": row.work_form,
+        "available_from": str(row.available_from) if row.available_from is not None else None,
+        "start_negotiable": row.start_negotiable,
+        "period_value": row.period_value,
+        "period_unit": row.period_unit,
+    }
+
+
+def _score_debug(value: float) -> float:
+    return round(value, 4)
 
 
 def _budget_guidance(budget_cap: int | None) -> str:
@@ -185,6 +207,29 @@ class MatchingService:
         if position is None:
             raise AiException(AiErrorCode.NOT_FOUND, "포지션을 찾을 수 없습니다.")
 
+        logger.info(
+            "MATCHING_DEBUG python.recommend.start position_id=%s recruit_count=%s "
+            "pool_multiplier=%s budget_cap=%s excluded_count=%s excluded_ids=%s "
+            "job_category=%s job_role=%s skills=%s min_career_years=%s work_style=%s "
+            "work_form=%s start_desired_date=%s start_negotiable=%s period_value=%s period_unit=%s",
+            position_id,
+            recruit_count,
+            pool_multiplier,
+            budget_cap,
+            len(excluded_freelancer_ids or []),
+            excluded_freelancer_ids or [],
+            position.job_category,
+            position.job_role,
+            position.skills,
+            position.min_career_years,
+            position.work_style,
+            position.work_form,
+            position.start_desired_date,
+            position.start_negotiable,
+            position.period_value,
+            position.period_unit,
+        )
+
         # 하드필터: AI매칭 동의 + 매칭 일시중지 아님 + 계정 ACTIVE + 직군/직무 일치
         # + 요구 스킬 1개 이상 + 이미 노출된 후보 제외. **후보를 배제하는 건 여기뿐이다.**
         # 유사도로는 자르지 않는다 — 조건이 좋은데 자기소개가 짧아 유사도가 낮은 사람이
@@ -193,6 +238,17 @@ class MatchingService:
             position_id, position.job_category, position.job_role,
             position.skills, excluded_freelancer_ids,
         )
+        logger.info(
+            "MATCHING_DEBUG python.search.strict_result position_id=%s row_count=%s",
+            position_id,
+            len(rows),
+        )
+        for row in rows:
+            logger.info(
+                "MATCHING_DEBUG python.search.strict_row position_id=%s row=%s",
+                position_id,
+                _row_debug(row),
+            )
 
         if not rows and position.skills:
             # 조건 완화 후 재검색(명세: "조건 충족 후보 0명 → 조건 완화 후 재검색").
@@ -203,23 +259,82 @@ class MatchingService:
             # 후보가 포함될 수 있습니다")가 이미 허용하는 상황이다. 어차피 조건점수 스킬 30점이
             # 0점이라 순위 맨 뒤로 간다.
             logger.info("후보 0명 → 스킬 조건을 풀어 재검색한다. position_id=%s", position_id)
+            logger.info(
+                "MATCHING_DEBUG python.search.relax position_id=%s reason=strict_empty "
+                "relaxed_skills=[] original_skills=%s",
+                position_id,
+                position.skills,
+            )
             rows = await self._embedding_service.search_scored_candidates(
                 position_id, position.job_category, position.job_role,
                 [], excluded_freelancer_ids,
             )
+            logger.info(
+                "MATCHING_DEBUG python.search.relaxed_result position_id=%s row_count=%s",
+                position_id,
+                len(rows),
+            )
+            for row in rows:
+                logger.info(
+                    "MATCHING_DEBUG python.search.relaxed_row position_id=%s row=%s",
+                    position_id,
+                    _row_debug(row),
+                )
 
         if not rows:
             # 재검색도 0명 → 스프링이 MT_009로 받아 "재추천 안내"를 띄운다.
+            logger.info(
+                "MATCHING_DEBUG python.recommend.empty position_id=%s reason=no_rows_after_relax",
+                position_id,
+            )
             raise AiException(AiErrorCode.CANDIDATE_POOL_EMPTY)
 
         # 임베딩 25 + 조건점수 75 를 **합산한 뒤** 자른다. 순차로 하면(유사도로 먼저 N명을 뽑고
         # 그 안에서 조건 정렬) 누가 후보가 되는지를 유사도가 100% 정하게 되어 75의 비중이 사라진다.
-        ranked = score_candidates(_to_position_condition(position, budget_cap),
-                                  [_to_candidate_condition(row) for row in rows])
+        position_condition = _to_position_condition(position, budget_cap)
+        candidate_conditions = [_to_candidate_condition(row) for row in rows]
+        ranked = score_candidates(position_condition, candidate_conditions)
+        ranked_by_id = {candidate.freelancer_id: candidate for candidate in ranked}
+        for condition in candidate_conditions:
+            breakdown = score_breakdown(position_condition, condition)
+            scored = ranked_by_id[condition.freelancer_id]
+            logger.info(
+                "MATCHING_DEBUG python.score.detail position_id=%s freelancer_id=%s "
+                "similarity=%s similarity_score=%s condition_score=%s total_score=%s "
+                "skill=%s career=%s pay=%s work_style=%s work_form=%s start_date=%s "
+                "period=%s raw_condition=%s normalized_condition=%s",
+                position_id,
+                condition.freelancer_id,
+                _score_debug(scored.similarity),
+                _score_debug(scored.similarity_score),
+                _score_debug(scored.condition_score),
+                _score_debug(scored.total_score),
+                _score_debug(breakdown.skill),
+                _score_debug(breakdown.career),
+                _score_debug(breakdown.pay),
+                _score_debug(breakdown.work_style),
+                _score_debug(breakdown.work_form),
+                _score_debug(breakdown.start_date),
+                _score_debug(breakdown.period),
+                _score_debug(breakdown.raw_condition),
+                _score_debug(breakdown.normalized_condition),
+            )
         top = ranked[: recruit_count * pool_multiplier]
         logger.info(
-            "1차 추림 완료. position_id=%s, 하드필터 통과 %d명 → 상위 %d명",
-            position_id, len(ranked), len(top),
+            "MATCHING_DEBUG python.rank.top position_id=%s hard_filter_count=%s top_count=%s top=%s",
+            position_id,
+            len(ranked),
+            len(top),
+            [
+                {
+                    "freelancer_id": candidate.freelancer_id,
+                    "similarity": _score_debug(candidate.similarity),
+                    "similarity_score": _score_debug(candidate.similarity_score),
+                    "condition_score": _score_debug(candidate.condition_score),
+                    "total_score": _score_debug(candidate.total_score),
+                }
+                for candidate in top
+            ],
         )
 
         freelancer_ids = [candidate.freelancer_id for candidate in top]
@@ -227,14 +342,41 @@ class MatchingService:
 
         model = self._gemini.model_for(GeminiTask.MATCHING)
         prompt = self._build_prompt(position, freelancer_ids, profiles, recruit_count, budget_cap)
+        logger.info(
+            "MATCHING_DEBUG python.llm.request position_id=%s model=%s top_ids=%s "
+            "profile_count=%s prompt_chars=%s prompt_preview=%s",
+            position_id,
+            model,
+            freelancer_ids,
+            len(profiles),
+            len(prompt),
+            prompt[:1000],
+        )
         try:
             raw, usage = await self._gemini.generate_json_with_usage(
                 GeminiTask.MATCHING, prompt, _RANKING_SCHEMA
             )
         except AiException as exc:
+            logger.info(
+                "MATCHING_DEBUG python.llm.failed position_id=%s model=%s error=%s",
+                position_id,
+                model,
+                exc,
+            )
             await self._record_call(position_id, model, prompt, None, None, str(exc))
             raise
         await self._record_call(position_id, model, prompt, raw, usage, None)
+        logger.info(
+            "MATCHING_DEBUG python.llm.response position_id=%s model=%s latency_ms=%s "
+            "prompt_tokens=%s output_tokens=%s retry_count=%s raw=%s",
+            position_id,
+            model,
+            usage.latency_ms,
+            usage.prompt_tokens,
+            usage.output_tokens,
+            usage.retry_count,
+            raw,
+        )
 
         try:
             parsed = json.loads(raw)
@@ -253,6 +395,27 @@ class MatchingService:
             for candidate in candidates
             if candidate.freelancer_id in similarity_by_id
         ]
+        logger.info(
+            "MATCHING_DEBUG python.llm.filtered position_id=%s before_count=%s after_count=%s "
+            "dropped_ids=%s candidates=%s",
+            position_id,
+            len(candidates),
+            len(filtered),
+            [
+                candidate.freelancer_id
+                for candidate in candidates
+                if candidate.freelancer_id not in similarity_by_id
+            ],
+            [
+                {
+                    "freelancer_id": candidate.freelancer_id,
+                    "score": candidate.score,
+                    "similarity": candidate.similarity,
+                    "reason": candidate.reason,
+                }
+                for candidate in filtered
+            ],
+        )
 
         # 스케일 검증은 **풀 밖 후보를 버린 뒤에** 한다. 지어낸 후보가 정상 점수(95)를 달고 오면
         # 최고점이 그 값으로 잡혀서, 정작 실제로 넘어갈 후보가 0.95 여도 검증을 통과해 버린다.
