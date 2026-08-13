@@ -23,6 +23,15 @@ from google.genai import types
 
 from app.core.config import Settings, get_settings
 from app.core.errors import AiErrorCode, AiException
+from app.core.metrics import (
+    gemini_attempts_total,
+    gemini_key_disabled_total,
+    gemini_keys_in_cooldown,
+    gemini_keys_total,
+    gemini_request_duration_seconds,
+    gemini_requests_total,
+    gemini_tokens_total,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -138,7 +147,17 @@ class GeminiClient:
         self._cooldown_until = [0.0] * self._key_count
         self._index = 0
 
+        # 쿨다운은 시간이 지나면 저절로 풀린다. 그래서 이벤트로 게이지를 올렸다 내리는 방식은
+        # 값이 어긋난 채로 남는다. 스크레이프 시점에 세는 함수를 연결한다.
+        gemini_keys_total.set(self._key_count)
+        gemini_keys_in_cooldown.set_function(self._cooldown_count)
+
         logger.info("Gemini 키 %d개 로드 (한도 초과 시 순서대로 전환)", self._key_count)
+
+    def _cooldown_count(self) -> int:
+        """지금 쿨다운 중인 키 수. 전체 키 수와 같아지면 모든 호출이 실패한다."""
+        now = time.monotonic()
+        return sum(1 for until in self._cooldown_until if until > now)
 
     def model_for(self, task: GeminiTask) -> str:
         mapping = {
@@ -172,6 +191,8 @@ class GeminiClient:
     def _disable(self, index: int, exc: BaseException) -> None:
         seconds = self._settings.gemini_key_cooldown_seconds
         self._cooldown_until[index] = time.monotonic() + seconds
+        # 키가 몇 번이나 한도에 걸리는지. 이 값이 늘면 키를 늘리거나 호출량을 줄여야 한다.
+        gemini_key_disabled_total.inc()
         # 다음 요청은 그다음 키에서 시작한다.
         self._index = (index + 1) % self._key_count
         # 키 값은 절대 로그에 남기지 않는다. 몇 번째 키인지만 남긴다.
@@ -188,10 +209,17 @@ class GeminiClient:
         call,
         fallback: AiErrorCode,
         timeout_code: AiErrorCode | None = None,
+        *,
+        task_label: str = "unknown",
+        model: str = "unknown",
     ) -> tuple[object, int]:
         """`call(client)` 을 성공할 때까지 키를 돌려 가며 수행한다. (결과, 총 시도 횟수) 를 준다.
 
         키 전환은 최대 키 개수만큼, 같은 키 재시도는 `gemini_max_retries` 회까지 한다.
+
+        task_label/model 은 메트릭 라벨용이다. 시도 횟수를 여기서 세는 이유는, 실패로 끝나면
+        예외만 올라가서 호출자가 몇 번 시도했는지 알 수 없기 때문이다. 실패한 호출의 시도
+        횟수가 빠지면 "재시도가 지연을 만들고 있는지"를 볼 수 없다.
         """
         attempts = 0
         retries_left = self._settings.gemini_max_retries
@@ -201,6 +229,7 @@ class GeminiClient:
         while True:
             index = self._pick()
             attempts += 1
+            gemini_attempts_total.labels(task_label, model).inc()
             try:
                 return await call(self._clients[index]), attempts
             except Exception as exc:
@@ -242,6 +271,44 @@ class GeminiClient:
         ) from last_exc
 
     # ------------------------------------------------------------------
+    # 메트릭 기록
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _record(
+        task_label: str,
+        model: str,
+        started: float,
+        outcome: str,
+        usage: "GeminiUsage | None" = None,
+    ) -> None:
+        """호출 1건의 결과를 기록한다. 성공·실패 양쪽에서 부른다.
+
+        지연은 재시도와 키 전환까지 포함한 '최종 결과까지의 시간'이다. 스프링이 겪는 대기
+        시간이 그것이라서, 모델 응답 시간만 재면 타임아웃 원인을 놓친다.
+        """
+        gemini_requests_total.labels(task_label, model, outcome).inc()
+        gemini_request_duration_seconds.labels(task_label, model).observe(
+            time.perf_counter() - started
+        )
+        if usage is None:
+            return
+        # 임베딩 호출은 usage_metadata 를 주지 않아 토큰이 None 이다. 그때는 세지 않는다.
+        if usage.prompt_tokens:
+            gemini_tokens_total.labels(task_label, model, "prompt").inc(usage.prompt_tokens)
+        if usage.output_tokens:
+            gemini_tokens_total.labels(task_label, model, "output").inc(usage.output_tokens)
+
+    @staticmethod
+    def _outcome_of(exc: BaseException) -> str:
+        """실패를 timeout 과 error 로 나눈다. 타임아웃은 대응이 달라서 따로 본다."""
+        if isinstance(exc, AiException) and exc.error_code is AiErrorCode.LLM_TIMEOUT:
+            return "timeout"
+        if isinstance(exc, TimeoutError):
+            return "timeout"
+        return "error"
+
+    # ------------------------------------------------------------------
     # 호출
     # ------------------------------------------------------------------
 
@@ -274,9 +341,22 @@ class GeminiClient:
                 )
             return vectors, response
 
-        result, attempts = await self._invoke(_call, AiErrorCode.EMBEDDING_FAILED)
+        task_label = GeminiTask.EMBEDDING.value
+        try:
+            result, attempts = await self._invoke(
+                _call,
+                AiErrorCode.EMBEDDING_FAILED,
+                task_label=task_label,
+                model=model,
+            )
+        except BaseException as exc:
+            self._record(task_label, model, started, self._outcome_of(exc))
+            raise
+
         vectors, response = result
-        return vectors, _usage(model, response, started, attempts)
+        usage = _usage(model, response, started, attempts)
+        self._record(task_label, model, started, "success", usage)
+        return vectors, usage
 
     async def generate_json(self, task: GeminiTask, prompt: str, response_schema: dict) -> str:
         """구조화된 응답을 받는다. 자유 텍스트를 파싱하면 프롬프트가 바뀔 때마다 깨진다."""
@@ -303,10 +383,21 @@ class GeminiClient:
                 raise AiException(AiErrorCode.LLM_RESPONSE_INVALID)
             return response
 
-        response, attempts = await self._invoke(
-            _call, AiErrorCode.LLM_CALL_FAILED, timeout_code=AiErrorCode.LLM_TIMEOUT
-        )
-        return response.text, _usage(model, response, started, attempts)
+        try:
+            response, attempts = await self._invoke(
+                _call,
+                AiErrorCode.LLM_CALL_FAILED,
+                timeout_code=AiErrorCode.LLM_TIMEOUT,
+                task_label=task.value,
+                model=model,
+            )
+        except BaseException as exc:
+            self._record(task.value, model, started, self._outcome_of(exc))
+            raise
+
+        usage = _usage(model, response, started, attempts)
+        self._record(task.value, model, started, "success", usage)
+        return response.text, usage
 
 
 _client: GeminiClient | None = None
