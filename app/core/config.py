@@ -58,6 +58,13 @@ class Settings(BaseSettings):
     # 이 값을 바꾸면 pgvector 컬럼과 기존 임베딩 전량 재생성이 함께 필요하다.
     embedding_dimension: int = 768
 
+    # 챗봇 관련성 임계값. 질문과 가장 가까운 정책 청크의 코사인 유사도가 이 값보다 낮으면
+    # LLM 을 호출하지 않고 거절한다. 0~1 이고 클수록 엄격하다.
+    #
+    # 느슨하게(낮게) 시작해서 조인다. 정상 질문을 막는 쪽이 무관한 질문에 답하는 것보다 훨씬
+    # 나쁘다 — 사용자는 "챗봇이 고장났다"고 느낀다. 차단 로그를 보고 조정한다.
+    chatbot_relevance_threshold: float = 0.55
+
     @field_validator("gemini_api_key")
     @classmethod
     def _require_one_gemini_key(cls, value: str) -> str:

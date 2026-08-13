@@ -57,3 +57,37 @@ COMMENT ON TABLE "position_embedding" IS '프로젝트 포지션 요구조건 �
 COMMENT ON COLUMN "freelancer_embedding"."freelancer_id" IS 'freelancer_profile.id (FK 미설정)';
 COMMENT ON COLUMN "freelancer_embedding"."source_hash" IS '원문 해시. 같으면 재생성하지 않는다';
 COMMENT ON COLUMN "freelancer_embedding"."model" IS '생성에 쓴 임베딩 모델명';
+
+
+-- =====================================================================
+-- 챗봇 지식 청크 — FAQ 챗봇의 "이 질문이 우리 서비스 얘기인가" 판정에 쓴다.
+--
+-- 사용자 질문을 임베딩해 여기서 가장 가까운 청크를 찾고, 그 거리가 임계값보다 멀면
+-- LLM 을 아예 호출하지 않고 거절한다. "1+1은?" 같은 질문에 답하고 하루 사용량까지
+-- 차감하던 문제를 막는 장치다.
+--
+-- 답변 생성에는 쓰지 않는다. 정책 전문이 프롬프트에 통째로 들어가 있어서,
+-- 검색으로 일부만 골라 넣으면 오히려 맥락이 잘린다. 여기는 관문 역할만 한다.
+-- =====================================================================
+
+CREATE TABLE IF NOT EXISTS "chatbot_knowledge" (
+    "id" BIGINT GENERATED ALWAYS AS IDENTITY NOT NULL,
+    -- 청크를 가리키는 고정 키. 문구를 고쳐도 이 값이 같으면 같은 행을 갱신한다.
+    "chunk_key" VARCHAR(100) NOT NULL,
+    "content" TEXT NOT NULL,
+    "embedding" vector(768) NOT NULL,
+    "model" VARCHAR(50) NOT NULL,
+    -- 원문 해시. 같으면 임베딩을 다시 만들지 않는다(시딩을 여러 번 돌려도 API 호출이 없다).
+    "source_hash" VARCHAR(64) NOT NULL,
+    "updated_at" TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    PRIMARY KEY ("id")
+);
+
+ALTER TABLE "chatbot_knowledge" ADD CONSTRAINT "uk_chatbot_knowledge_key" UNIQUE ("chunk_key");
+
+-- 청크가 수십 건 규모라 ivfflat 인덱스를 만들지 않는다. 그 정도면 순차 스캔이 더 빠르고,
+-- ivfflat 은 행이 적을 때 오히려 정확도만 떨어뜨린다. 수백 건을 넘으면 그때 만든다.
+
+COMMENT ON TABLE "chatbot_knowledge" IS '챗봇 관련성 판정용 정책 청크 (AI 서버 소유)';
+COMMENT ON COLUMN "chatbot_knowledge"."chunk_key" IS '청크 고정 키. 문구가 바뀌어도 같은 행을 갱신한다';
+COMMENT ON COLUMN "chatbot_knowledge"."source_hash" IS '원문 해시. 같으면 임베딩을 재생성하지 않는다';

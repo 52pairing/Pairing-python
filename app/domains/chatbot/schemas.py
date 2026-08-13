@@ -17,3 +17,18 @@ class AskResponse(BaseModel):
         ),
     )
     model: str = Field(..., description="답변에 쓴 LLM 모델명. 결과 재현·감사용")
+    out_of_scope: bool = Field(
+        False,
+        description=(
+            "페어링과 무관한 질문이어서 답하지 않았다는 표시. "
+            "스프링은 이 값이 true 면 사용량을 차감하지 않고 고정 안내 문구로 응답한다."
+        ),
+    )
+
+
+class KnowledgeReindexResponse(BaseModel):
+    """관련성 판정용 지식 청크 재색인 결과."""
+
+    total: int = Field(..., description="전체 청크 수")
+    embedded: int = Field(..., description="이번에 임베딩한 수(신규·문구 변경)")
+    skipped: int = Field(..., description="문구가 그대로여서 건너뛴 수")
