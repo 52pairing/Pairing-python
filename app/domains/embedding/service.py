@@ -31,6 +31,14 @@ def _hash(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+def _vector_preview(vector: list[float], limit: int = 12) -> list[float]:
+    return [round(float(value), 6) for value in vector[:limit]]
+
+
+def _vector_log(vector: list[float]) -> list[float]:
+    return [round(float(value), 6) for value in vector]
+
+
 class EmbeddingService:
     def __init__(
         self,
@@ -78,6 +86,18 @@ class EmbeddingService:
                 retry_count=usage.retry_count,
             )
         )
+        logger.info(
+            "MATCHING_DEBUG python.embedding.generated ref_type=%s ref_id=%s model=%s "
+            "dimension=%s vector_preview=%s vector=%s text_chars=%s text_preview=%s",
+            ref_type.value,
+            ref_id,
+            usage.model,
+            len(vectors[0]),
+            _vector_preview(vectors[0]),
+            _vector_log(vectors[0]),
+            len(text),
+            text[:_LOGGED_TEXT_LIMIT],
+        )
         return vectors[0]
 
     async def _record(self, call: AiCallRecord) -> None:
@@ -91,6 +111,14 @@ class EmbeddingService:
         # 이력서를 저장할 때마다 호출되므로, 내용이 그대로면 API 를 부르지 않는다.
         # (Gemini 임베딩 호출은 돈과 시간이 든다)
         if await self._repository.find_freelancer_hash(freelancer_id) == source_hash:
+            logger.info(
+                "MATCHING_DEBUG python.embedding.skip target=freelancer freelancer_id=%s "
+                "model=%s source_hash=%s text_chars=%s",
+                freelancer_id,
+                model,
+                source_hash[:16],
+                len(text),
+            )
             return EmbeddingResponse(
                 target_id=freelancer_id,
                 model=model,
@@ -100,6 +128,16 @@ class EmbeddingService:
 
         vector = await self._embed_and_log(text, RefType.FREELANCER, freelancer_id)
         await self._repository.upsert_freelancer(freelancer_id, vector, model, source_hash)
+        logger.info(
+            "MATCHING_DEBUG python.embedding.upserted target=freelancer freelancer_id=%s "
+            "model=%s dimension=%s source_hash=%s vector_preview=%s vector=%s",
+            freelancer_id,
+            model,
+            len(vector),
+            source_hash[:16],
+            _vector_preview(vector),
+            _vector_log(vector),
+        )
 
         return EmbeddingResponse(
             target_id=freelancer_id, model=model, dimension=len(vector), skipped=False
@@ -107,8 +145,20 @@ class EmbeddingService:
 
     async def upsert_position(self, position_id: int, text: str) -> EmbeddingResponse:
         model = self._gemini.model_for(GeminiTask.EMBEDDING)
+        source_hash = _hash(f"{model}:{text}")
         vector = await self._embed_and_log(text, RefType.POSITION, position_id)
-        await self._repository.upsert_position(position_id, vector, model, _hash(f"{model}:{text}"))
+        await self._repository.upsert_position(position_id, vector, model, source_hash)
+        logger.info(
+            "MATCHING_DEBUG python.embedding.upserted target=position position_id=%s "
+            "model=%s dimension=%s source_hash=%s vector_preview=%s vector=%s text_chars=%s",
+            position_id,
+            model,
+            len(vector),
+            source_hash[:16],
+            _vector_preview(vector),
+            _vector_log(vector),
+            len(text),
+        )
 
         return EmbeddingResponse(
             target_id=position_id, model=model, dimension=len(vector), skipped=False
@@ -127,8 +177,30 @@ class EmbeddingService:
             # 포지션 임베딩을 아직 안 만든 상태. 스프링이 프로젝트 등록 시 호출해야 한다.
             raise AiException(AiErrorCode.EMBEDDING_NOT_FOUND)
 
+        logger.info(
+            "MATCHING_DEBUG python.embedding.search position_id=%s dimension=%s vector_preview=%s vector=%s "
+            "limit=%s job_category=%s job_role=%s excluded_count=%s excluded_ids=%s",
+            position_id,
+            len(vector),
+            _vector_preview(list(vector)),
+            _vector_log(list(vector)),
+            limit,
+            job_category,
+            job_role,
+            len(excluded_freelancer_ids or []),
+            excluded_freelancer_ids or [],
+        )
         rows = await self._repository.search_similar_freelancers(
             list(vector), limit, job_category, job_role, excluded_freelancer_ids
+        )
+        logger.info(
+            "MATCHING_DEBUG python.embedding.search.result position_id=%s row_count=%s rows=%s",
+            position_id,
+            len(rows),
+            [
+                {"freelancer_id": freelancer_id, "similarity": round(score, 6)}
+                for freelancer_id, score in rows
+            ],
         )
         return SimilaritySearchResponse(
             position_id=position_id,
@@ -152,6 +224,26 @@ class EmbeddingService:
             # 포지션 임베딩을 아직 안 만든 상태. 스프링이 모집 시작 시 호출해야 한다.
             raise AiException(AiErrorCode.EMBEDDING_NOT_FOUND)
 
-        return await self._repository.search_scored_candidates(
+        logger.info(
+            "MATCHING_DEBUG python.embedding.scored_search position_id=%s dimension=%s "
+            "vector_preview=%s vector=%s job_category=%s job_role=%s required_skills=%s excluded_count=%s "
+            "excluded_ids=%s",
+            position_id,
+            len(vector),
+            _vector_preview(list(vector)),
+            _vector_log(list(vector)),
+            job_category,
+            job_role,
+            required_skills,
+            len(excluded_freelancer_ids or []),
+            excluded_freelancer_ids or [],
+        )
+        rows = await self._repository.search_scored_candidates(
             list(vector), job_category, job_role, required_skills, excluded_freelancer_ids
         )
+        logger.info(
+            "MATCHING_DEBUG python.embedding.scored_search.result position_id=%s row_count=%s",
+            position_id,
+            len(rows),
+        )
+        return rows

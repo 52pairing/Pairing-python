@@ -1,5 +1,6 @@
 """벡터 저장/검색. SQL 은 이 계층 밖으로 새지 않는다."""
 
+import logging
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
@@ -9,6 +10,8 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domains.embedding.models import FreelancerEmbedding, PositionEmbedding
+
+logger = logging.getLogger(__name__)
 
 # 스프링 소유 테이블. AI 서버는 SELECT 만 한다(app/domains/matching/repository.py와 동일 규칙).
 # 여기 결과를 pgvector 코사인 거리와 같은 쿼리에서 조인해야 해서(임베딩 컬럼은 ORM 타입이 필요) 가벼운
@@ -220,6 +223,16 @@ class EmbeddingRepository:
                 },
             )
         ).mappings().all()
+        logger.info(
+            "MATCHING_DEBUG python.embedding.sql.search_scored job_category=%s job_role=%s "
+            "required_skills=%s skip_skill_filter=%s excluded_count=%s result_count=%s",
+            job_category,
+            job_role,
+            required_skills,
+            not required_skills,
+            len(excluded_freelancer_ids or []),
+            len(rows),
+        )
 
         return [
             CandidateConditionRow(

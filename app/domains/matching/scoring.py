@@ -120,6 +120,19 @@ class ScoredCandidate:
     total_score: float
 
 
+@dataclass(frozen=True)
+class ScoreBreakdown:
+    skill: float
+    career: float
+    pay: float
+    work_style: float
+    work_form: float
+    start_date: float
+    period: float
+    raw_condition: float
+    normalized_condition: float
+
+
 def _to_months(value: int | None, unit: str | None) -> float | None:
     if value is None:
         return None
@@ -228,16 +241,34 @@ def _score_period(position: PositionCondition, candidate: CandidateCondition) ->
 
 def condition_score(position: PositionCondition, candidate: CandidateCondition) -> float:
     """조건점수를 0~1 로 돌려준다. 항목별 점수 합계(0~100)를 100 으로 나눈 값이다."""
-    raw = (
-        _score_skills(position, candidate)
-        + _score_career(position, candidate)
-        + _score_pay(position, candidate)
-        + _score_exact_match(position.work_style, candidate.work_style, _WORK_STYLE_MAX)
-        + _score_exact_match(position.work_form, candidate.work_form, _WORK_FORM_MAX)
-        + _score_start_date(position, candidate)
-        + _score_period(position, candidate)
+    return score_breakdown(position, candidate).normalized_condition
+
+
+def score_breakdown(position: PositionCondition, candidate: CandidateCondition) -> ScoreBreakdown:
+    """조건점수의 항목별 원점수와 정규화 값을 함께 돌려준다.
+
+    매칭 운영 로그에서 후보가 왜 올라오거나 떨어졌는지 확인하기 위한 진단용 함수다.
+    실제 채점식은 `condition_score`와 같은 경로를 쓰므로 로그와 결과가 갈라지지 않는다.
+    """
+    skill = _score_skills(position, candidate)
+    career = _score_career(position, candidate)
+    pay = _score_pay(position, candidate)
+    work_style = _score_exact_match(position.work_style, candidate.work_style, _WORK_STYLE_MAX)
+    work_form = _score_exact_match(position.work_form, candidate.work_form, _WORK_FORM_MAX)
+    start_date = _score_start_date(position, candidate)
+    period = _score_period(position, candidate)
+    raw = skill + career + pay + work_style + work_form + start_date + period
+    return ScoreBreakdown(
+        skill=skill,
+        career=career,
+        pay=pay,
+        work_style=work_style,
+        work_form=work_form,
+        start_date=start_date,
+        period=period,
+        raw_condition=raw,
+        normalized_condition=raw / _CONDITION_MAX,
     )
-    return raw / _CONDITION_MAX
 
 
 def _percent_ranks(similarities: list[float]) -> list[float]:
