@@ -36,6 +36,7 @@ _POSITION = PositionRequirement(
 def _profile(freelancer_id: int, **overrides) -> FreelancerProfile:
     defaults = {
         "freelancer_id": freelancer_id,
+        "name": f"홍길동{freelancer_id}",
         "job_category": "DEVELOPMENT",
         "job_role": "BACKEND",
         "career_years": 6,
@@ -485,6 +486,26 @@ async def test_similarity_is_not_leaked_into_the_prompt():
 
     sent_prompt = service._gemini.generate_json_with_usage.await_args.args[1]
     assert "0.7321" not in sent_prompt
+
+
+@pytest.mark.asyncio
+async def test_name_is_not_leaked_into_the_prompt():
+    """이름은 운영 로그 확인용으로만 조회한다 — 프롬프트에 들어가면 안 된다.
+
+    LLM 이 이름으로 사람을 편향 판단할 수 있고(추천 근거는 이력 내용이어야 한다), 프롬프트는
+    ai_agent_log 에 그대로 저장되므로 필요 없는 개인정보를 늘리는 것이기도 하다.
+    `FreelancerProfile.name` 을 나중에 `_describe_candidate` 에 넣는 실수를 막는 회귀 테스트다.
+    """
+    llm_response = '{"candidates": [{"freelancer_id": 101, "score": 88, "reason": "경력 충족"}]}'
+    service = _make_service({101: _profile(101, name="김테스트")}, llm_response=llm_response)
+    service._embedding_service.search_scored_candidates = AsyncMock(
+        return_value=[_condition_row(101)]
+    )
+
+    await service.recommend(position_id=1, recruit_count=1, pool_multiplier=3)
+
+    sent_prompt = service._gemini.generate_json_with_usage.await_args.args[1]
+    assert "김테스트" not in sent_prompt
 
 
 @pytest.mark.asyncio
