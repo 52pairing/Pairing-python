@@ -61,7 +61,11 @@ http_requests_in_progress = Gauge(
 gemini_requests_total = Counter(
     "gemini_requests_total",
     "Gemini 호출 수",
-    # outcome: success / timeout / error
+    # outcome:
+    #   success   정상 응답
+    #   timeout   Gemini 응답이 늦어 우리가 끊었다
+    #   cancelled 호출자(스프링)가 먼저 끊었다 — Gemini 잘못이 아니다
+    #   error     그 외 실패
     ["task", "model", "outcome"],
 )
 

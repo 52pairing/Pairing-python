@@ -301,7 +301,16 @@ class GeminiClient:
 
     @staticmethod
     def _outcome_of(exc: BaseException) -> str:
-        """실패를 timeout 과 error 로 나눈다. 타임아웃은 대응이 달라서 따로 본다."""
+        """실패를 timeout / cancelled / error 로 나눈다. 대응이 각각 달라서 합치면 안 된다.
+
+        cancelled 를 따로 두는 이유
+            스프링의 AI_TIMEOUT_MS(120초)가 먼저 끊기면 커넥션이 닫히고, Starlette 이 이 태스크를
+            취소해서 CancelledError 가 올라온다. 이건 Gemini 가 실패한 게 아니라 호출자가
+            기다리다 포기한 것이다. error 로 뭉치면 Gemini 에러율이 실제보다 높게 보여서,
+            "AI 서버가 불안정하다"와 "스프링 타임아웃이 짧다"를 구분할 수 없게 된다.
+        """
+        if isinstance(exc, asyncio.CancelledError):
+            return "cancelled"
         if isinstance(exc, AiException) and exc.error_code is AiErrorCode.LLM_TIMEOUT:
             return "timeout"
         if isinstance(exc, TimeoutError):
