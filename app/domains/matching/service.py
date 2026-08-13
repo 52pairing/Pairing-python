@@ -11,6 +11,7 @@
 
 import json
 import logging
+import time
 
 from app.clients.gemini import GeminiClient, GeminiTask, GeminiUsage
 from app.core.errors import AiErrorCode, AiException
@@ -81,23 +82,6 @@ def _to_candidate_condition(row: CandidateConditionRow) -> CandidateCondition:
         period_value=row.period_value,
         period_unit=row.period_unit,
     )
-
-
-def _row_debug(row: CandidateConditionRow) -> dict[str, object]:
-    return {
-        "freelancer_id": row.freelancer_id,
-        "similarity": round(row.similarity, 6),
-        "matched_skill_levels": row.matched_skill_levels,
-        "career_years": row.career_years,
-        "pay_unit": row.pay_unit,
-        "pay_amount": str(row.pay_amount) if row.pay_amount is not None else None,
-        "work_style": row.work_style,
-        "work_form": row.work_form,
-        "available_from": str(row.available_from) if row.available_from is not None else None,
-        "start_negotiable": row.start_negotiable,
-        "period_value": row.period_value,
-        "period_unit": row.period_unit,
-    }
 
 
 def _score_debug(value: float) -> float:
@@ -203,6 +187,8 @@ class MatchingService:
         excluded_freelancer_ids: list[int] | None = None,
         budget_cap: int | None = None,
     ) -> MatchingResponse:
+        started = time.perf_counter()
+        relaxed = False
         position = await self._directory_repository.find_position_requirement(position_id)
         if position is None:
             raise AiException(AiErrorCode.NOT_FOUND, "포지션을 찾을 수 없습니다.")
@@ -238,17 +224,14 @@ class MatchingService:
             position_id, position.job_category, position.job_role,
             position.skills, excluded_freelancer_ids,
         )
+        # 하드필터는 통과 인원수만 남긴다. 후보 1명당 한 줄씩 찍으면 통과자가 수백~수천 명일 때
+        # 추천 한 번에 로그가 그만큼 늘어나서, 정작 필요한 단계별 흐름이 묻힌다. 개별 후보의
+        # 값은 아래 python.score.detail 에 항목별 점수와 함께 남는다.
         logger.info(
             "MATCHING_DEBUG python.search.strict_result position_id=%s row_count=%s",
             position_id,
             len(rows),
         )
-        for row in rows:
-            logger.info(
-                "MATCHING_DEBUG python.search.strict_row position_id=%s row=%s",
-                position_id,
-                _row_debug(row),
-            )
 
         if not rows and position.skills:
             # 조건 완화 후 재검색(명세: "조건 충족 후보 0명 → 조건 완화 후 재검색").
@@ -258,6 +241,7 @@ class MatchingService:
             # 대안이 "아무도 못 보여줌"이라 P09("조건에 맞는 후보가 부족하여 적합도가 낮은
             # 후보가 포함될 수 있습니다")가 이미 허용하는 상황이다. 어차피 조건점수 스킬 30점이
             # 0점이라 순위 맨 뒤로 간다.
+            relaxed = True
             logger.info("후보 0명 → 스킬 조건을 풀어 재검색한다. position_id=%s", position_id)
             logger.info(
                 "MATCHING_DEBUG python.search.relax position_id=%s reason=strict_empty "
@@ -274,12 +258,6 @@ class MatchingService:
                 position_id,
                 len(rows),
             )
-            for row in rows:
-                logger.info(
-                    "MATCHING_DEBUG python.search.relaxed_row position_id=%s row=%s",
-                    position_id,
-                    _row_debug(row),
-                )
 
         if not rows:
             # 재검색도 0명 → 스프링이 MT_009로 받아 "재추천 안내"를 띄운다.
@@ -343,14 +321,17 @@ class MatchingService:
         model = self._gemini.model_for(GeminiTask.MATCHING)
         prompt = self._build_prompt(position, freelancer_ids, profiles, recruit_count, budget_cap)
         logger.info(
+            # 프롬프트 원문은 stdout 에 남기지 않는다. 후보 여러 명의 자기소개·경력사항이 그대로
+            # 들어 있어서, 로그의 접근권한·보존기간·삭제요청 대응이 DB 와 다르다는 문제가 그대로
+            # 적용된다(embedding/service.py 의 _LOGGED_TEXT_LIMIT 주석 참고). 원문이 필요한 조회는
+            # ai_agent_log.request_json 이 담당한다 — 관리자 원본 로그 화면의 용도가 그것이다.
             "MATCHING_DEBUG python.llm.request position_id=%s model=%s top_ids=%s "
-            "profile_count=%s prompt_chars=%s prompt_preview=%s",
+            "profile_count=%s prompt_chars=%s",
             position_id,
             model,
             freelancer_ids,
             len(profiles),
             len(prompt),
-            prompt[:1000],
         )
         try:
             raw, usage = await self._gemini.generate_json_with_usage(
@@ -412,6 +393,37 @@ class MatchingService:
                     "score": candidate.score,
                     "similarity": candidate.similarity,
                     "reason": candidate.reason,
+                }
+                for candidate in filtered
+            ],
+        )
+
+        # 파이프라인 한 줄 요약. 단계별 상세는 위 로그들에 있지만, 후보가 많으면 그 사이에 줄이
+        # 수십 개 끼어서 "어느 단계에서 몇 명이 줄었나"가 한눈에 안 읽힌다. 이 줄만 보면 된다.
+        # 스케일 검증보다 **먼저** 찍는다 — 검증이 실패해 예외로 빠져도 파이프라인 결과는 남아야 한다.
+        logger.info(
+            "MATCHING_DEBUG python.recommend.summary position_id=%s hard_filter=%s relaxed=%s "
+            "pool_cut=%s recruit=%s pool_multiplier=%s llm_returned=%s llm_dropped=%s final=%s "
+            "top_score=%s cut_score=%s elapsed_ms=%s final_candidates=%s",
+            position_id,
+            len(ranked),
+            relaxed,
+            len(top),
+            recruit_count,
+            pool_multiplier,
+            len(candidates),
+            len(candidates) - len(filtered),
+            len(filtered),
+            _score_debug(top[0].total_score),
+            _score_debug(top[-1].total_score),
+            int((time.perf_counter() - started) * 1000),
+            [
+                {
+                    "freelancer_id": candidate.freelancer_id,
+                    "name": profiles[candidate.freelancer_id].name
+                    if candidate.freelancer_id in profiles
+                    else None,
+                    "score": candidate.score,
                 }
                 for candidate in filtered
             ],

@@ -22,8 +22,12 @@ from app.domains.embedding.schemas import (
 
 logger = logging.getLogger(__name__)
 
-# 임베딩 원문은 이력서 전체라 길다. 로그에는 앞부분만 남긴다(원인 파악에는 충분하고,
-# ai_agent_log 가 이력서 사본 저장소가 되면 안 된다).
+# 임베딩 원문은 이력서 전체라 길다. ai_agent_log 에는 앞부분만 남긴다(원인 파악에는 충분하고,
+# 그 테이블이 이력서 사본 저장소가 되면 안 된다). 관리자 원본 로그 화면이 이 값을 쓴다.
+#
+# **stdout 로그에는 원문을 넣지 않는다.** 로그는 DB 와 접근권한·보존기간이 다르고, 탈퇴 회원의
+# 개인정보 삭제 요청에 대응할 수 없다(DB 는 지울 수 있지만 로그는 못 지운다). 길이만 남겨도
+# "텍스트가 비었나/짧나"는 판단되므로 text_chars 로 충분하다.
 _LOGGED_TEXT_LIMIT = 500
 
 
@@ -31,12 +35,12 @@ def _hash(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+# 벡터는 앞 몇 개만 남긴다. 768 개를 통째로 찍으면 로그 한 줄이 약 9KB 가 되고, 재색인
+# 1600 건이면 그것만 30MB 다 — 정작 필요한 예외 스택이 묻혀서 못 찾는다(2026-08-13 실제로 겪음).
+# 값이 정상 범위인지 보는 데는 앞 몇 개로 충분하고, 생성 여부는 dimension 으로 판단한다.
+# ai_agent_log 도 같은 이유로 차원만 저장한다(_embed_and_log 참고) — 두 곳 기준을 맞춘다.
 def _vector_preview(vector: list[float], limit: int = 12) -> list[float]:
     return [round(float(value), 6) for value in vector[:limit]]
-
-
-def _vector_log(vector: list[float]) -> list[float]:
-    return [round(float(value), 6) for value in vector]
 
 
 class EmbeddingService:
@@ -88,15 +92,13 @@ class EmbeddingService:
         )
         logger.info(
             "MATCHING_DEBUG python.embedding.generated ref_type=%s ref_id=%s model=%s "
-            "dimension=%s vector_preview=%s vector=%s text_chars=%s text_preview=%s",
+            "dimension=%s vector_preview=%s text_chars=%s",
             ref_type.value,
             ref_id,
             usage.model,
             len(vectors[0]),
             _vector_preview(vectors[0]),
-            _vector_log(vectors[0]),
             len(text),
-            text[:_LOGGED_TEXT_LIMIT],
         )
         return vectors[0]
 
@@ -130,13 +132,12 @@ class EmbeddingService:
         await self._repository.upsert_freelancer(freelancer_id, vector, model, source_hash)
         logger.info(
             "MATCHING_DEBUG python.embedding.upserted target=freelancer freelancer_id=%s "
-            "model=%s dimension=%s source_hash=%s vector_preview=%s vector=%s",
+            "model=%s dimension=%s source_hash=%s vector_preview=%s",
             freelancer_id,
             model,
             len(vector),
             source_hash[:16],
             _vector_preview(vector),
-            _vector_log(vector),
         )
 
         return EmbeddingResponse(
@@ -150,13 +151,12 @@ class EmbeddingService:
         await self._repository.upsert_position(position_id, vector, model, source_hash)
         logger.info(
             "MATCHING_DEBUG python.embedding.upserted target=position position_id=%s "
-            "model=%s dimension=%s source_hash=%s vector_preview=%s vector=%s text_chars=%s",
+            "model=%s dimension=%s source_hash=%s vector_preview=%s text_chars=%s",
             position_id,
             model,
             len(vector),
             source_hash[:16],
             _vector_preview(vector),
-            _vector_log(vector),
             len(text),
         )
 
@@ -178,12 +178,11 @@ class EmbeddingService:
             raise AiException(AiErrorCode.EMBEDDING_NOT_FOUND)
 
         logger.info(
-            "MATCHING_DEBUG python.embedding.search position_id=%s dimension=%s vector_preview=%s vector=%s "
+            "MATCHING_DEBUG python.embedding.search position_id=%s dimension=%s vector_preview=%s "
             "limit=%s job_category=%s job_role=%s excluded_count=%s excluded_ids=%s",
             position_id,
             len(vector),
             _vector_preview(list(vector)),
-            _vector_log(list(vector)),
             limit,
             job_category,
             job_role,
@@ -226,12 +225,11 @@ class EmbeddingService:
 
         logger.info(
             "MATCHING_DEBUG python.embedding.scored_search position_id=%s dimension=%s "
-            "vector_preview=%s vector=%s job_category=%s job_role=%s required_skills=%s excluded_count=%s "
+            "vector_preview=%s job_category=%s job_role=%s required_skills=%s excluded_count=%s "
             "excluded_ids=%s",
             position_id,
             len(vector),
             _vector_preview(list(vector)),
-            _vector_log(list(vector)),
             job_category,
             job_role,
             required_skills,
