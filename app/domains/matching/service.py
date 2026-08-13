@@ -2,7 +2,7 @@
 
 세 단계로 나눈다.
   1) 하드필터로 자격 없는 사람을 뺀다 (여기서만 후보가 배제된다)
-  2) 임베딩 유사도 30 + DB 조건점수 70 을 **합산**해 상위 (모집 인원 x 3)명으로 추린다
+  2) 임베딩 유사도 25 + DB 조건점수 75 를 **합산**해 상위 (모집 인원 x 3)명으로 추린다
   3) LLM 이 그 풀만 보고 순위와 사유를 만든다
 
 전체 프리랜서를 LLM 에 넣지 않는 이유는 비용·지연·컨텍스트 한계 셋 다다.
@@ -200,7 +200,7 @@ class MatchingService:
             # 오추천이다. AI매칭 동의·일시중지·계정 상태도 사용자 의사라 못 푼다. 그래서
             # 풀 수 있는 건 스킬 조건 하나뿐이다. 스킬 0개인 사람까지 넣는 건 분명 느슨하지만,
             # 대안이 "아무도 못 보여줌"이라 P09("조건에 맞는 후보가 부족하여 적합도가 낮은
-            # 후보가 포함될 수 있습니다")가 이미 허용하는 상황이다. 어차피 조건점수 스킬 25점이
+            # 후보가 포함될 수 있습니다")가 이미 허용하는 상황이다. 어차피 조건점수 스킬 30점이
             # 0점이라 순위 맨 뒤로 간다.
             logger.info("후보 0명 → 스킬 조건을 풀어 재검색한다. position_id=%s", position_id)
             rows = await self._embedding_service.search_scored_candidates(
@@ -212,8 +212,8 @@ class MatchingService:
             # 재검색도 0명 → 스프링이 MT_009로 받아 "재추천 안내"를 띄운다.
             raise AiException(AiErrorCode.CANDIDATE_POOL_EMPTY)
 
-        # 임베딩 30 + 조건점수 70 을 **합산한 뒤** 자른다. 순차로 하면(유사도로 먼저 N명을 뽑고
-        # 그 안에서 조건 정렬) 누가 후보가 되는지를 유사도가 100% 정하게 되어 70의 비중이 사라진다.
+        # 임베딩 25 + 조건점수 75 를 **합산한 뒤** 자른다. 순차로 하면(유사도로 먼저 N명을 뽑고
+        # 그 안에서 조건 정렬) 누가 후보가 되는지를 유사도가 100% 정하게 되어 75의 비중이 사라진다.
         ranked = score_candidates(_to_position_condition(position, budget_cap),
                                   [_to_candidate_condition(row) for row in rows])
         top = ranked[: recruit_count * pool_multiplier]

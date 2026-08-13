@@ -145,7 +145,7 @@ class EmbeddingService:
     ) -> list[CandidateConditionRow]:
         """하드필터 통과자 전원 + 채점용 조건 값. 자르지 않는다.
 
-        자르는 건 임베딩 30 + 조건점수 70 을 합산한 뒤 매칭 도메인이 한다.
+        자르는 건 임베딩 25 + 조건점수 75 를 합산한 뒤 매칭 도메인이 한다.
         """
         vector = await self._repository.find_position_vector(position_id)
         if vector is None:
