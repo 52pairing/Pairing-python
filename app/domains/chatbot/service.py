@@ -13,6 +13,7 @@ import json
 import logging
 
 from app.clients.gemini import GeminiClient, GeminiTask, GeminiUsage
+from app.core.config import get_settings
 from app.core.errors import AiErrorCode, AiException
 from app.domains.ai_log.repository import (
     AgentType,
@@ -20,9 +21,16 @@ from app.domains.ai_log.repository import (
     AiCallRecord,
     LogStatus,
 )
+from app.domains.chatbot.repository import ChatbotKnowledgeRepository
 from app.domains.chatbot.schemas import AskRequest, AskResponse
 
 logger = logging.getLogger(__name__)
+
+# 범위 밖 질문에 돌려주는 고정 문구. LLM 이 만들지 않는다 — 매번 말이 달라지면 안 된다.
+# 1:1 문의를 권하지 않는다. "1+1은?" 에 문의를 유도하면 관리자에게 이상한 문의만 쌓인다.
+_OUT_OF_SCOPE_ANSWER = (
+    "페어링 서비스 관련 질문에만 답변드릴 수 있어요. 이용 방법이나 정책에 대해 물어봐 주세요."
+)
 
 # 답변과 이어지는 화면 코드. LLM 에게 URL 을 만들게 하면 없는 경로를 지어내므로,
 # 고를 수 있는 값을 여기서 닫아 둔다. 실제 경로 매핑은 스프링이 한다.
@@ -43,8 +51,10 @@ _ANSWER_SCHEMA = {
     "properties": {
         "answer": {"type": "string"},
         "intent": {"type": "string", "enum": _INTENTS},
+        # 임베딩 게이트를 통과했더라도 모델이 다시 한 번 판단한다. 2중 방어다.
+        "out_of_scope": {"type": "boolean"},
     },
-    "required": ["answer", "intent"],
+    "required": ["answer", "intent", "out_of_scope"],
 }
 
 _INTENT_GUIDE = """
@@ -136,13 +146,27 @@ _SCREEN_GUIDE = """
 
 
 class ChatbotService:
-    def __init__(self, gemini: GeminiClient, ai_log_repository: AiAgentLogRepository | None = None):
+    def __init__(
+        self,
+        gemini: GeminiClient,
+        ai_log_repository: AiAgentLogRepository | None = None,
+        knowledge_repository: ChatbotKnowledgeRepository | None = None,
+    ):
         self._gemini = gemini
         # 없으면 로그만 안 남기고 그대로 동작한다(테스트에서 굳이 안 넣어도 되게).
         self._ai_log_repository = ai_log_repository
+        # 없으면 관련성 게이트를 건너뛴다. 게이트는 부가 장치라, 이것 때문에 챗봇이 멈추면 안 된다.
+        self._knowledge_repository = knowledge_repository
+        self._settings = get_settings()
 
     async def ask(self, request: AskRequest) -> AskResponse:
         model = self._gemini.model_for(GeminiTask.NEGOTIATION)
+
+        if not await self._is_relevant(request.question):
+            # LLM 을 부르지 않고 여기서 끝낸다. 이게 이 게이트의 존재 이유다 —
+            # 무관한 질문에 토큰을 쓰고 사용자 한도까지 깎던 것을 막는다.
+            return AskResponse(answer=_OUT_OF_SCOPE_ANSWER, intent="NONE", model=model, out_of_scope=True)
+
         prompt = self._build_prompt(request.question)
 
         try:
@@ -161,10 +185,56 @@ class ChatbotService:
             logger.warning("챗봇 응답 파싱 실패: %s", exc)
             raise AiException(AiErrorCode.LLM_RESPONSE_INVALID) from exc
 
+        # 빈 답변 검사보다 먼저 본다. 범위 밖이면 answer 를 비우라고 지시했으므로,
+        # 순서를 바꾸면 정상 동작이 LLM_RESPONSE_INVALID 로 터진다.
+        #
+        # 게이트를 통과했어도 LLM 이 "이건 우리 얘기가 아니다"라고 판단할 수 있다. 2중 방어다 —
+        # 임계값을 느슨하게 잡아 둔 만큼 통과하는 질문이 생기고, 그건 여기서 걸린다.
+        if parsed.get("out_of_scope") is True:
+            logger.info("[챗봇 범위 밖 - LLM 판정] 질문=%s", request.question)
+            return AskResponse(
+                answer=_OUT_OF_SCOPE_ANSWER, intent="NONE", model=model, out_of_scope=True
+            )
+
         if not isinstance(answer, str) or not answer.strip():
             raise AiException(AiErrorCode.LLM_RESPONSE_INVALID, "답변이 비어 있습니다.")
 
         return AskResponse(answer=answer.strip(), intent=self._read_intent(parsed), model=model)
+
+    async def _is_relevant(self, question: str) -> bool:
+        """질문이 페어링 정책 범위 안인지 임베딩 유사도로 판정한다.
+
+        판정할 수 없는 상황(지식 미시딩, 임베딩 실패)은 <b>전부 통과</b>시킨다.
+        게이트는 부가 장치다. 판정이 안 된다고 막아버리면 정상 질문까지 전부 차단된다 —
+        무관한 질문에 답하는 것보다 훨씬 나쁘다.
+        """
+        if self._knowledge_repository is None:
+            return True
+
+        try:
+            vectors = await self._gemini.embed([question])
+            nearest = await self._knowledge_repository.find_nearest(vectors[0])
+        except Exception:
+            logger.warning("챗봇 관련성 판정 실패 - 통과시킨다", exc_info=True)
+            return True
+
+        if nearest is None:
+            logger.warning("챗봇 지식 청크가 비어 있다 - 관련성 판정을 건너뛴다")
+            return True
+
+        threshold = self._settings.chatbot_relevance_threshold
+        relevant = nearest.similarity >= threshold
+
+        if not relevant:
+            # 차단된 질문을 남긴다. 임계값을 조이거나 청크를 보강할 근거가 이 로그다.
+            logger.info(
+                "[챗봇 범위 밖 차단] similarity=%.3f (임계 %.2f), 최근접=%s, 질문=%s",
+                nearest.similarity,
+                threshold,
+                nearest.chunk_key,
+                question,
+            )
+        return relevant
 
     @staticmethod
     def _read_intent(parsed: dict) -> str:
@@ -221,8 +291,15 @@ class ChatbotService:
             "(예: '마이페이지 > 내 이력서/포트폴리오 에서 작성하실 수 있습니다')\n"
             "3. URL 이나 /mypage/resume 같은 경로는 쓰지 않는다. 메뉴 이름만 쓴다.\n"
             "4. 2~3문장으로 끝낸다. 조건이나 예외가 있으면 그것까지 말하고, 없는 말은 덧붙이지 않는다.\n"
-            "5. 정책에 없는 내용이거나 개인정보·법률·의료 등 답할 수 없는 질문이면, 아는 척하지 말고 "
-            "1:1 문의를 이용해 달라고 안내한다. **정책에 있는 내용을 1:1 문의로 넘기지 않는다.**\n"
+            "5. 페어링 정책 범위인데 아래 내용에 없으면, 아는 척하지 말고 1:1 문의를 안내한다. "
+            "**정책에 있는 내용을 1:1 문의로 넘기지 않는다.**\n"
+            "\n"
+            "[out_of_scope]\n"
+            "페어링 서비스와 <b>무관한</b> 질문이면 out_of_scope 를 true 로 하고 answer 는 빈 문자열로 둔다. "
+            "수학 계산·날씨·상식·잡담·타사 서비스가 여기 해당한다. 절대 답을 알려주지 않는다 — "
+            "'1+1은?' 에 '2입니다' 라고 답하면 안 된다.\n"
+            "페어링 이용 방법·정책에 관한 질문이면 답할 수 있든 없든 out_of_scope 는 false 다. "
+            "(정책에 없어서 못 답하는 것과 우리 서비스 얘기가 아닌 것은 다르다)\n"
             "\n"
             "answer 와 함께 intent 를 하나 고른다. 답변을 읽은 사용자가 바로 갈 만한 화면이 "
             "있을 때만 고르고, 애매하면 NONE 을 쓴다.\n"
