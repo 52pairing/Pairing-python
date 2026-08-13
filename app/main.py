@@ -13,6 +13,7 @@ from app.clients.spring import get_spring_client
 from app.core.config import get_settings
 from app.core.errors import register_exception_handlers
 from app.core.logging import configure_logging
+from app.core.metrics import bind_db_pool_metrics
 from app.core.middleware import TraceIdMiddleware
 from app.db.session import engine
 
@@ -23,6 +24,8 @@ logger = logging.getLogger(__name__)
 async def lifespan(_: FastAPI):
     settings = get_settings()
     configure_logging(settings.log_level)
+    # 커넥션 풀 게이지를 엔진에 연결한다. 엔진이 만들어진 뒤여야 해서 여기서 한다.
+    bind_db_pool_metrics(engine)
     logger.info(
         "AI 서버 기동: env=%s, embedding=%s, matching=%s",
         settings.app_env,

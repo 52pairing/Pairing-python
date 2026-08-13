@@ -37,6 +37,10 @@ class PositionRequirement:
 @dataclass
 class FreelancerProfile:
     freelancer_id: int
+    # 운영 로그에서 "누가 최종 추천됐나"를 확인하려고 가져온다.
+    # **프롬프트에는 절대 넣지 않는다** — LLM 이 이름으로 사람을 편향 판단할 수 있고
+    # (_describe_candidate 가 이 필드를 쓰지 않는 이유), 추천 근거는 이력 내용이어야 한다.
+    name: str | None
     job_category: str
     job_role: str
     career_years: int
@@ -118,8 +122,9 @@ class DirectoryRepository:
             await self._session.execute(
                 text(
                     """
-                    SELECT fp.id AS freelancer_id, fc.job_category, fc.job_role, fc.career_years,
-                           fc.has_freelance_exp, r.self_introduction,
+                    SELECT fp.id AS freelancer_id, a.name, fc.job_category, fc.job_role,
+                           fc.career_years,
+                           fc.has_freelance_experience AS has_freelance_exp, r.self_introduction,
                            fc.pay_unit, fc.pay_amount, fc.work_style, fc.work_form,
                            fc.available_from, fc.start_negotiable, fc.period_value, fc.period_unit,
                            COALESCE(string_agg(
@@ -128,12 +133,13 @@ class DirectoryRepository:
                                ' / ' ORDER BY rc.start_date DESC
                            ), '') AS career_summary
                     FROM freelancer_profile fp
+                    JOIN account a ON a.id = fp.account_id
                     JOIN freelancer_condition fc ON fc.account_id = fp.account_id
                     LEFT JOIN resume r ON r.account_id = fp.account_id
                     LEFT JOIN resume_career rc ON rc.resume_id = r.id
                     WHERE fp.id = ANY(:freelancer_ids)
-                    GROUP BY fp.id, fc.job_category, fc.job_role, fc.career_years,
-                             fc.has_freelance_exp, r.self_introduction,
+                    GROUP BY fp.id, a.name, fc.job_category, fc.job_role, fc.career_years,
+                             fc.has_freelance_experience, r.self_introduction,
                              fc.pay_unit, fc.pay_amount, fc.work_style, fc.work_form,
                              fc.available_from, fc.start_negotiable, fc.period_value, fc.period_unit
                     """
@@ -163,6 +169,7 @@ class DirectoryRepository:
         return {
             row["freelancer_id"]: FreelancerProfile(
                 freelancer_id=row["freelancer_id"],
+                name=row["name"],
                 job_category=row["job_category"],
                 job_role=row["job_role"],
                 career_years=row["career_years"],

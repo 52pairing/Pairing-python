@@ -156,11 +156,28 @@ X-Trace-Id: a1b2c3d4
 
 | 메서드 | 경로 | 언제 호출 |
 | --- | --- | --- |
-| PUT | `/api/v1/embeddings/freelancers` | 이력서·조건 저장 시 |
-| PUT | `/api/v1/embeddings/positions` | 프로젝트 포지션 등록·수정 시 |
-| GET | `/api/v1/embeddings/positions/{id}/candidates?limit=` | 1차 후보 풀 조회 |
+| PUT | `/api/v1/embeddings/freelancers` | **이력서 정식 저장·수정 시** (임시저장은 제외) + 관리자 일괄 재색인 |
+| PUT | `/api/v1/embeddings/positions` | **착수금 결제 완료로 모집이 시작될 때** + 모집 시작 후 프로젝트 수정 시 |
+| GET | `/api/v1/embeddings/positions/{id}/candidates?limit=` | 1차 후보 풀 조회 (내부 확인용) |
 | POST | `/api/v1/matchings/recommendations` | 매칭 라운드 시작 시 |
 | POST | `/api/v1/contracts/draft-texts` | 협상 타결 후 계약서 생성 시 |
+
+> 임베딩 시점은 2026-08-11 팀 확정입니다. **조건(`freelancer_condition`) 저장은 임베딩과 무관합니다** —
+> 스킬·단가·근무조건이 전부 DB 조건점수로 가므로 조건을 바꿔도 벡터가 똑같이 나옵니다.
+> **프로젝트는 "등록 시점"이 아니라 "결제 완료"입니다** — 등록만 하고 결제하지 않은 프로젝트는
+> 추천이 시작되지 않아 임베딩 비용을 쓰지 않습니다.
+
+**`POST /matchings/recommendations`의 `budget_cap`은 스프링이 계산해서 넣어줍니다**(1인 월단가 상한,
+원 단위). AI 서버가 스스로 못 구하는 값입니다 — 순예산을 알려면 수수료율이 필요하고 그 수수료율은
+클라이언트 등급에 걸려 있습니다. 여기서 계산하려 들면 스프링(`BudgetCapCalculator`)과 두 벌이 되어
+조용히 어긋납니다. **없으면(`null`) 단가 비교를 아예 생략합니다** — 프롬프트에 남는 건 프로젝트
+총예산(전체 인원 x 전체 기간)뿐인데 1인 월급과 자릿수가 달라, 그대로 비교하면 멀쩡한 후보가 전부
+"예산 초과"로 감점됩니다.
+
+**추천 응답의 `similarity`는 LLM이 만든 값이 아닙니다.** 1차 추림에서 서버가 계산한 **코사인
+유사도 원본값**(순위 환산 전)이고, 스프링이 `matching_candidate.similarity`(numeric(6,4))에 그대로
+저장합니다. 프롬프트에는 **넣지 않습니다** — 넣으면 LLM이 원문을 읽는 대신 그 숫자를 베껴서,
+1차 추림 점수를 다시 확인하는 셈이 되기 때문입니다.
 
 **추천 응답의 `score`는 0~100입니다.** 스프링이 `matching_candidate.base_score`(NUMERIC(5,2), 0~100)에
 그대로 저장하고 **50점 미만을 `lowScoreWarned`(적합도 낮음 경고) 기준**으로 씁니다. 범위를 바꾸려면
@@ -240,8 +257,8 @@ gemini.model_for(GeminiTask.REVIEW)      # settings.gemini_model_review
 
 ## 7. 아직 없는 것
 
-- **`ai_agent_log` 적재 — 매칭·임베딩·챗봇만 연결됨.** 협상·계약은 아직 로그를 남기지 않습니다.
-  각 도메인 담당이 붙이면 됩니다(아래 "AI 호출 로그" 참고).
+- **`ai_agent_log` 적재 — 계약(`contract`)만 아직 안 붙었습니다.** 매칭·임베딩·챗봇·협상은 연결됨.
+  계약 담당이 붙이면 됩니다(아래 "AI 호출 로그" 참고).
 - 임베딩 고아 행 정리 (일괄 재생성은 백엔드의 관리자 재색인 API로 해결됨)
 - 인증 실패·LLM 실패에 대한 알림/메트릭
 - `GEMINI_MODEL_REVIEW` 설정만 있고 쓰는 곳이 없습니다 — 프로젝트 등록 검수(P02)는 LLM이 아니라

@@ -18,6 +18,24 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
+    # 임베딩 검색 SQL 은 raw text() 라서 파이썬 단위 테스트로는 의미를 검증할 수 없다
+    # (문자열을 grep 하는 테스트는 소스에 적힌 글자를 소스에서 찾는 동어반복이다).
+    # 실제 pgvector 를 띄워서 쿼리를 돌려야만 오타·문법·조인 오류가 잡힌다.
+    # 이 서비스가 없으면 해당 테스트는 skip 되고 나머지는 그대로 통과한다.
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
     steps:
       - uses: actions/checkout@v4
 
@@ -37,9 +55,12 @@ jobs:
       - name: Ruff
         run: ruff check .
 
-      # 계약 테스트는 tests/conftest.py 가 더미 환경변수를 주입하므로
-      # PostgreSQL·Gemini 키가 없어도 통과한다.
+      # 계약 테스트는 tests/conftest.py 가 더미 환경변수를 주입하므로 Gemini 키가 없어도 통과한다.
+      # AI_TEST_DB_URL 은 위 services 의 pgvector 를 가리킨다 — 이게 있어야
+      # test_search_scored_candidates_against_real_db 가 skip 되지 않고 실제로 돈다.
       - name: Pytest
+        env:
+          AI_TEST_DB_URL: postgresql+asyncpg://postgres:test@localhost:5432/test
         run: pytest -q --junitxml=test-results.xml
 
       - name: Upload test report

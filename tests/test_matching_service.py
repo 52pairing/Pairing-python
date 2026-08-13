@@ -9,7 +9,7 @@ import pytest
 from app.clients.gemini import GeminiUsage
 from app.core.errors import AiErrorCode, AiException
 from app.domains.ai_log.repository import AgentType, LogStatus, RefType
-from app.domains.embedding.schemas import SimilarFreelancer, SimilaritySearchResponse
+from app.domains.embedding.repository import CandidateConditionRow
 from app.domains.matching.repository import FreelancerProfile, PositionRequirement
 from app.domains.matching.service import MatchingService
 
@@ -36,6 +36,7 @@ _POSITION = PositionRequirement(
 def _profile(freelancer_id: int, **overrides) -> FreelancerProfile:
     defaults = {
         "freelancer_id": freelancer_id,
+        "name": f"홍길동{freelancer_id}",
         "job_category": "DEVELOPMENT",
         "job_role": "BACKEND",
         "career_years": 6,
@@ -55,16 +56,34 @@ def _profile(freelancer_id: int, **overrides) -> FreelancerProfile:
     return FreelancerProfile(**{**defaults, **overrides})
 
 
+def _condition_row(freelancer_id: int, **overrides) -> CandidateConditionRow:
+    """하드필터를 통과한 후보 1행. 기본값은 _POSITION 조건을 대체로 충족하는 사람이다."""
+    defaults = {
+        "freelancer_id": freelancer_id,
+        "similarity": 0.9,
+        "matched_skill_levels": ["ADVANCED"],
+        "career_years": 6,
+        "pay_unit": "MONTHLY",
+        "pay_amount": Decimal("6200000"),
+        "work_style": "REMOTE",
+        "work_form": "FULL_TIME",
+        "available_from": date(2026, 9, 1),
+        "start_negotiable": False,
+        "period_value": 4,
+        "period_unit": "MONTH",
+    }
+    return CandidateConditionRow(**{**defaults, **overrides})
+
+
 def _make_service(
     profiles: dict[int, FreelancerProfile],
     llm_response: str,
     ai_log_repository: AsyncMock | None = None,
 ) -> MatchingService:
     embedding_service = AsyncMock()
-    embedding_service.search_candidates.return_value = SimilaritySearchResponse(
-        position_id=1,
-        candidates=[SimilarFreelancer(freelancer_id=fid, score=0.9) for fid in profiles],
-    )
+    embedding_service.search_scored_candidates.return_value = [
+        _condition_row(fid) for fid in profiles
+    ]
 
     # model_for()는 동기 메서드다 — AsyncMock 전체로 만들면 코루틴을 돌려줘서 조립 결과가 깨진다.
     gemini = MagicMock()
@@ -95,9 +114,7 @@ async def test_prompt_includes_position_requirement_and_candidate_resume():
 
     prompt = service._build_prompt(
         _POSITION,
-        SimilaritySearchResponse(
-            position_id=1, candidates=[SimilarFreelancer(freelancer_id=101, score=0.9)]
-        ),
+        [101],
         {101: _profile(101)},
         recruit_count=1,
     )
@@ -179,9 +196,7 @@ async def test_prompt_includes_condition_fields_for_stage_e_penalty():
 
     prompt = service._build_prompt(
         _POSITION,
-        SimilaritySearchResponse(
-            position_id=1, candidates=[SimilarFreelancer(freelancer_id=101, score=0.9)]
-        ),
+        [101],
         {101: _profile(101)},
         recruit_count=1,
     )
@@ -209,9 +224,7 @@ async def test_prompt_pins_score_range_to_0_100():
 
     prompt = service._build_prompt(
         _POSITION,
-        SimilaritySearchResponse(
-            position_id=1, candidates=[SimilarFreelancer(freelancer_id=101, score=0.9)]
-        ),
+        [101],
         {101: _profile(101)},
         recruit_count=1,
     )
@@ -227,9 +240,7 @@ async def test_prompt_marks_negotiable_start_date_so_llm_does_not_penalize_it():
 
     prompt = service._build_prompt(
         _POSITION,
-        SimilaritySearchResponse(
-            position_id=1, candidates=[SimilarFreelancer(freelancer_id=101, score=0.9)]
-        ),
+        [101],
         {101: _profile(101, available_from=date(2026, 12, 1), start_negotiable=True)},
         recruit_count=1,
     )
@@ -246,9 +257,7 @@ async def test_prompt_omits_condition_lines_when_values_are_missing():
 
     prompt = service._build_prompt(
         _POSITION,
-        SimilaritySearchResponse(
-            position_id=1, candidates=[SimilarFreelancer(freelancer_id=101, score=0.9)]
-        ),
+        [101],
         {101: _profile(101, pay_amount=None, available_from=None, period_value=None)},
         recruit_count=1,
     )
@@ -332,14 +341,17 @@ async def test_recommend_allows_genuinely_low_score_when_scale_is_right():
 
 
 @pytest.mark.asyncio
-async def test_recommend_widens_pool_and_retries_when_first_search_is_empty():
-    """명세: "조건 충족 후보 0명 → 조건 완화 후 재검색". 직군/직무는 그대로 두고 풀만 넓힌다."""
+async def test_recommend_relaxes_skill_filter_when_first_search_is_empty():
+    """명세: "조건 충족 후보 0명 → 조건 완화 후 재검색".
+
+    재설계 후 유사도 컷이 사라져서, 후보 0명은 오직 하드필터 때문이다. 그중 풀 수 있는 건
+    스킬 조건 하나뿐이다 — 직군/직무를 풀면 백엔드 자리에 디자이너가 오고, AI매칭 동의·
+    일시중지·계정 상태는 사용자 의사라 못 푼다.
+    """
     service = _make_service({101: _profile(101)}, llm_response="{}")
-    empty = SimilaritySearchResponse(position_id=1, candidates=[])
-    found = SimilaritySearchResponse(
-        position_id=1, candidates=[SimilarFreelancer(freelancer_id=101, score=0.4)]
+    service._embedding_service.search_scored_candidates = AsyncMock(
+        side_effect=[[], [_condition_row(101)]]
     )
-    service._embedding_service.search_candidates = AsyncMock(side_effect=[empty, found])
     service._gemini.generate_json_with_usage = AsyncMock(
         return_value=(
             '{"candidates": [{"freelancer_id": 101, "score": 55, "reason": "경력 충족"}]}',
@@ -351,27 +363,25 @@ async def test_recommend_widens_pool_and_retries_when_first_search_is_empty():
     result = await service.recommend(position_id=1, recruit_count=2, pool_multiplier=3)
 
     assert [c.freelancer_id for c in result.candidates] == [101]
-    first, second = service._embedding_service.search_candidates.await_args_list
-    # 1차 6명(2x3) → 재검색은 그 3배로 넓힌다.
-    assert first.args[1] == 6
-    assert second.args[1] == 18
+    first, second = service._embedding_service.search_scored_candidates.await_args_list
+    # 1차는 포지션 요구 스킬로, 재검색은 스킬 없이.
+    assert first.args[3] == ["SPRING_BOOT", "POSTGRESQL"]
+    assert second.args[3] == []
     # 직군/직무는 두 번 다 그대로여야 한다. 완화한다고 직무를 풀면 오추천이 된다.
-    assert first.args[2:4] == second.args[2:4] == ("DEVELOPMENT", "BACKEND")
+    assert first.args[1:3] == second.args[1:3] == ("DEVELOPMENT", "BACKEND")
 
 
 @pytest.mark.asyncio
 async def test_recommend_raises_pool_empty_when_relaxed_search_also_finds_nothing():
     service = _make_service({101: _profile(101)}, llm_response="{}")
-    service._embedding_service.search_candidates = AsyncMock(
-        return_value=SimilaritySearchResponse(position_id=1, candidates=[])
-    )
+    service._embedding_service.search_scored_candidates = AsyncMock(return_value=[])
 
     with pytest.raises(AiException) as exc_info:
         await service.recommend(position_id=1, recruit_count=2, pool_multiplier=3)
 
     assert exc_info.value.error_code == AiErrorCode.CANDIDATE_POOL_EMPTY
     # 완화 재검색까지 두 번은 시도해야 한다.
-    assert service._embedding_service.search_candidates.await_count == 2
+    assert service._embedding_service.search_scored_candidates.await_count == 2
 
 
 @pytest.mark.asyncio
@@ -383,3 +393,137 @@ async def test_recommend_raises_not_found_when_position_missing():
         await service.recommend(position_id=1, recruit_count=1, pool_multiplier=3)
 
     assert exc_info.value.error_code == AiErrorCode.NOT_FOUND
+
+
+@pytest.mark.asyncio
+async def test_prompt_uses_budget_cap_as_monthly_rate_ceiling():
+    """budget_cap 이 오면 후보의 1인 월단가와 바로 비교하라고 지시한다."""
+    service = _make_service({101: _profile(101)}, llm_response="{}")
+
+    prompt = service._build_prompt(
+        _POSITION,
+        [101],
+        {101: _profile(101)},
+        recruit_count=1,
+        budget_cap=4_500_000,
+    )
+
+    assert "1인 월단가 상한: 4500000원" in prompt
+    # 시급/일급 후보도 같은 단위로 맞춰야 비교가 성립한다.
+    assert "160시간" in prompt
+    assert "20일" in prompt
+
+
+@pytest.mark.asyncio
+async def test_prompt_forbids_budget_comparison_when_cap_missing():
+    """budget_cap 이 없으면 프롬프트에 있는 건 총예산(전체 인원 x 전체 기간)뿐이다.
+
+    1인 월급과 자릿수가 달라서 그대로 비교하면 멀쩡한 후보가 전부 '예산 초과'로 감점된다.
+    옛 스프링 배포와 섞여 도는 동안 실제로 일어날 수 있는 조합이라 회귀로 남긴다.
+    """
+    service = _make_service({101: _profile(101)}, llm_response="{}")
+
+    prompt = service._build_prompt(
+        _POSITION,
+        [101],
+        {101: _profile(101)},
+        recruit_count=1,
+    )
+
+    assert "두 숫자를 직접 비교하지 마라" in prompt
+    assert "1인 월단가 상한:" not in prompt
+
+
+@pytest.mark.asyncio
+async def test_recommend_passes_budget_cap_through_to_prompt():
+    """라우터 → 서비스 → 프롬프트까지 값이 실제로 흘러가는지."""
+    llm_response = '{"candidates": [{"freelancer_id": 101, "score": 95, "reason": "경력 충족"}]}'
+    service = _make_service({101: _profile(101)}, llm_response=llm_response)
+
+    await service.recommend(
+        position_id=1, recruit_count=1, pool_multiplier=3, budget_cap=4_500_000
+    )
+
+    sent_prompt = service._gemini.generate_json_with_usage.await_args.args[1]
+    assert "1인 월단가 상한: 4500000원" in sent_prompt
+
+
+@pytest.mark.asyncio
+async def test_response_carries_similarity_from_first_stage():
+    """유사도는 LLM 이 만드는 값이 아니라 **서버가 1차 추림에서 계산한 값**이다.
+
+    스프링이 `matching_candidate.similarity`(numeric(6,4))에 그대로 저장한다. 지금까지 그 컬럼엔
+    0.0 이 박혀 있어서 "이 후보가 왜 뽑혔나"를 나중에 되짚을 수 없었다.
+    """
+    llm_response = '{"candidates": [{"freelancer_id": 101, "score": 88, "reason": "경력 충족"}]}'
+    service = _make_service({101: _profile(101)}, llm_response=llm_response)
+    service._embedding_service.search_scored_candidates = AsyncMock(
+        return_value=[_condition_row(101, similarity=0.7321)]
+    )
+
+    result = await service.recommend(position_id=1, recruit_count=1, pool_multiplier=3)
+
+    [candidate] = result.candidates
+    assert candidate.similarity == pytest.approx(0.7321)
+    # LLM 이 준 점수는 그대로 남아야 한다(유사도로 덮어쓰지 않는다).
+    assert candidate.score == 88
+
+
+@pytest.mark.asyncio
+async def test_similarity_is_not_leaked_into_the_prompt():
+    """프롬프트에 유사도를 넣으면 LLM 이 원문을 읽는 대신 그 숫자를 베낀다.
+
+    1차 추림 점수를 다시 확인하는 셈이라 새로 알아내는 게 없다 — LLM 은 원문을 직접 읽고
+    자기 판단으로 점수를 새로 매겨야 한다(기존 원칙).
+    """
+    llm_response = '{"candidates": [{"freelancer_id": 101, "score": 88, "reason": "경력 충족"}]}'
+    service = _make_service({101: _profile(101)}, llm_response=llm_response)
+    service._embedding_service.search_scored_candidates = AsyncMock(
+        return_value=[_condition_row(101, similarity=0.7321)]
+    )
+
+    await service.recommend(position_id=1, recruit_count=1, pool_multiplier=3)
+
+    sent_prompt = service._gemini.generate_json_with_usage.await_args.args[1]
+    assert "0.7321" not in sent_prompt
+
+
+@pytest.mark.asyncio
+async def test_name_is_not_leaked_into_the_prompt():
+    """이름은 운영 로그 확인용으로만 조회한다 — 프롬프트에 들어가면 안 된다.
+
+    LLM 이 이름으로 사람을 편향 판단할 수 있고(추천 근거는 이력 내용이어야 한다), 프롬프트는
+    ai_agent_log 에 그대로 저장되므로 필요 없는 개인정보를 늘리는 것이기도 하다.
+    `FreelancerProfile.name` 을 나중에 `_describe_candidate` 에 넣는 실수를 막는 회귀 테스트다.
+    """
+    llm_response = '{"candidates": [{"freelancer_id": 101, "score": 88, "reason": "경력 충족"}]}'
+    service = _make_service({101: _profile(101, name="김테스트")}, llm_response=llm_response)
+    service._embedding_service.search_scored_candidates = AsyncMock(
+        return_value=[_condition_row(101)]
+    )
+
+    await service.recommend(position_id=1, recruit_count=1, pool_multiplier=3)
+
+    sent_prompt = service._gemini.generate_json_with_usage.await_args.args[1]
+    assert "김테스트" not in sent_prompt
+
+
+@pytest.mark.asyncio
+async def test_hallucinated_candidate_is_dropped_before_similarity_lookup():
+    """풀에 없는 ID 를 LLM 이 지어내면 유사도를 붙일 수 없다 — 붙이기 전에 걸러져야 한다.
+
+    (걸러지지 않으면 KeyError 로 추천 전체가 500 이 된다.)
+    """
+    llm_response = (
+        '{"candidates": ['
+        '{"freelancer_id": 101, "score": 88, "reason": "경력 충족"},'
+        '{"freelancer_id": 999, "score": 95, "reason": "지어낸 후보"}]}'
+    )
+    service = _make_service({101: _profile(101)}, llm_response=llm_response)
+    service._embedding_service.search_scored_candidates = AsyncMock(
+        return_value=[_condition_row(101, similarity=0.5)]
+    )
+
+    result = await service.recommend(position_id=1, recruit_count=1, pool_multiplier=3)
+
+    assert [c.freelancer_id for c in result.candidates] == [101]
