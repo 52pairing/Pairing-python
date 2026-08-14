@@ -75,6 +75,10 @@ CREATE TABLE IF NOT EXISTS "chatbot_knowledge" (
     -- 청크를 가리키는 고정 키. 문구를 고쳐도 이 값이 같으면 같은 행을 갱신한다.
     "chunk_key" VARCHAR(100) NOT NULL,
     "content" TEXT NOT NULL,
+    -- POSITIVE(우리 서비스 얘기) / NEGATIVE(차단해야 하는 유형의 본보기).
+    -- 판정이 "얼마나 가까운가"가 아니라 "어느 쪽에 더 가까운가"라서 둘을 같은 표에 둔다.
+    -- enum 타입을 쓰지 않는다 — 값을 늘릴 때 DB 타입을 손대지 않아도 되게.
+    "polarity" VARCHAR(10) DEFAULT 'POSITIVE' NOT NULL,
     "embedding" vector(768) NOT NULL,
     "model" VARCHAR(50) NOT NULL,
     -- 원문 해시. 같으면 임베딩을 다시 만들지 않는다(시딩을 여러 번 돌려도 API 호출이 없다).
@@ -91,3 +95,4 @@ ALTER TABLE "chatbot_knowledge" ADD CONSTRAINT "uk_chatbot_knowledge_key" UNIQUE
 COMMENT ON TABLE "chatbot_knowledge" IS '챗봇 관련성 판정용 정책 청크 (AI 서버 소유)';
 COMMENT ON COLUMN "chatbot_knowledge"."chunk_key" IS '청크 고정 키. 문구가 바뀌어도 같은 행을 갱신한다';
 COMMENT ON COLUMN "chatbot_knowledge"."source_hash" IS '원문 해시. 같으면 임베딩을 재생성하지 않는다';
+COMMENT ON COLUMN "chatbot_knowledge"."polarity" IS 'POSITIVE=서비스 범위, NEGATIVE=차단 본보기. 최근접이 NEGATIVE 면 막는다';
