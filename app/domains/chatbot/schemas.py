@@ -19,7 +19,10 @@ class AskResponse(BaseModel):
     model: str = Field(..., description="답변에 쓴 LLM 모델명. 결과 재현·감사용")
     out_of_scope: bool = Field(
         False,
-        description="페어링과 무관한 질문이어서 답하지 않았다는 표시. 관찰용이며 차감 판단은 charge_quota 가 한다.",
+        description=(
+            "페어링과 무관한 질문이어서 답하지 않았다는 표시. "
+            "관찰용이며 차감 판단은 charge_quota 가 한다."
+        ),
     )
     charge_quota: bool = Field(
         True,

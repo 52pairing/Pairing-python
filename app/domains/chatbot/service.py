@@ -308,7 +308,8 @@ class ChatbotService:
         # 인사는 정책 질문도 차단 대상도 아닌 제3의 부류라 먼저 본다. 다만 <b>정책 질문보다
         # 확실히 가까울 때만</b> 인사로 처리한다 — "안녕하세요 수수료 얼마예요?" 를 인사로
         # 보면 정해진 인사만 돌려주고 진짜 질문은 답하지 않은 채 끝난다.
-        if greeting is not None and greeting.similarity > positive.similarity + self._settings.chatbot_negative_margin:
+        margin = self._settings.chatbot_negative_margin
+        if greeting is not None and greeting.similarity > positive.similarity + margin:
             logger.info(
                 "[챗봇 게이트] 인사 인사말=%s(%.3f) 양성=%s(%.3f) "
                 "-> LLM 호출 안 함, 차감 안 함 | 질문=%s",
@@ -329,7 +330,6 @@ class ChatbotService:
         # ② 양성이 하한 미달이면 막는다. 음성 본보기가 못 덮는 종류(전혀 새로운 주제)를
         #    여기서 걸러낸다.
         threshold = self._settings.chatbot_relevance_threshold
-        margin = self._settings.chatbot_negative_margin
         gap = negative.similarity - positive.similarity if negative else None
 
         if gap is not None and gap > margin:

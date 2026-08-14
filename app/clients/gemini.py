@@ -167,7 +167,10 @@ class GeminiClient:
 
         # "전환했다"로 읽히지 않게 쓴다. 이 줄은 기동 시 한 번 나오는 안내이고, 실제 전환은
         # 429/401/403 을 만났을 때만 따로 로그가 남는다.
-        logger.info("Gemini 키 %d개 로드 완료 (한도 초과가 나면 다음 키로 넘어가도록 설정됨)", self._key_count)
+        logger.info(
+            "Gemini 키 %d개 로드 완료 (한도 초과가 나면 다음 키로 넘어가도록 설정됨)",
+            self._key_count,
+        )
 
     def _cooldown_count(self) -> int:
         """지금 쿨다운 중인 키 수. 전체 키 수와 같아지면 모든 호출이 실패한다."""
