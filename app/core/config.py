@@ -6,7 +6,7 @@
 
 from functools import lru_cache
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -64,6 +64,38 @@ class Settings(BaseSettings):
     # 느슨하게(낮게) 시작해서 조인다. 정상 질문을 막는 쪽이 무관한 질문에 답하는 것보다 훨씬
     # 나쁘다 — 사용자는 "챗봇이 고장났다"고 느낀다. 차단 로그를 보고 조정한다.
     chatbot_relevance_threshold: float = 0.55
+    # ---------- AI 스텁 (부하 테스트 전용) ----------
+    # 켜면 Gemini 를 실제로 부르지 않고 스키마에 맞는 더미를 만들어 돌려준다.
+    # (app/clients/gemini_stub.py)
+    #
+    # 왜 필요한가
+    #   k6 로 AI 경로에 부하를 걸면 실제 호출이 그만큼 나가서 (1) 무료 티어 쿼터가 소진되고
+    #   (2) 키가 전부 쿨다운에 들어가 그 시점부터 전부 실패하며 (3) 돈이 든다. 그러면 측정하려던
+    #   "부하가 늘 때 응답이 어떻게 변하는가" 대신 "쿼터가 언제 떨어지는가"를 재게 된다.
+    #
+    #   더미는 지연을 파라미터로 주므로 매 실행이 같은 조건이 된다. 스프링 스레드가 AI 응답을
+    #   기다리며 점유되는 문제(부하 테스트의 주 관심사)는 더미로도 그대로 재현된다.
+    #
+    # ★ 켜 둔 채로 잊으면 서비스가 조용히 가짜 응답을 준다. 그래서 세 겹으로 막는다.
+    #   1) prod 에서는 아래 검증이 기동을 거부한다
+    #   2) 기동 로그에 매번 경고를 남긴다
+    #   3) gemini_stub_mode 게이지가 1 이 되어 대시보드에 드러난다
+    ai_stub_mode: bool = False
+
+    # 더미가 응답하기까지 흉내낼 지연(ms). 0 이면 즉시 응답한다.
+    #   0        — 순수 인프라 한계 측정 (AI 대기가 없을 때의 상한)
+    #   3000     — 빠른 LLM 응답
+    #   20000    — 느린 응답. 스프링 스레드 점유 문제가 이 근처에서 드러난다
+    #   125000   — 스프링 AI_TIMEOUT_MS(120초) 초과. 타임아웃 경로와 취소 처리를 검증한다
+    ai_stub_delay_ms: int = 0
+
+    # 위 지연에 더할 흔들림(± ms). 전부 같은 값이면 지연 히스토그램이 한 버킷에만 쌓여서
+    # p50/p95/p99 가 구분되지 않는다. 실제 LLM 처럼 퍼뜨려야 백분위 그래프가 의미를 갖는다.
+    ai_stub_jitter_ms: int = 0
+
+    # 더미가 실패를 섞는 비율(0.0~1.0). 서킷브레이커 동작과 outcome 분리(error/timeout)를
+    # 확인할 때만 쓴다. 기본은 전부 성공이다.
+    ai_stub_fail_rate: float = Field(default=0.0, ge=0.0, le=1.0)
 
     @field_validator("gemini_api_key")
     @classmethod
@@ -72,6 +104,19 @@ class Settings(BaseSettings):
         if not [key for key in (value or "").split(",") if key.strip()]:
             raise ValueError("GEMINI_API_KEY 에 유효한 키가 없습니다. (쉼표로 여러 개 지정 가능)")
         return value
+
+    @model_validator(mode="after")
+    def _forbid_stub_in_prod(self) -> "Settings":
+        """운영에서는 스텁을 켤 수 없다.
+
+        환경변수 하나가 남아 있으면 서비스가 조용히 가짜 응답을 준다. 로그 경고만으로는
+        막을 수 없다 — 아무도 기동 로그를 계속 보지 않는다. 그래서 기동 자체를 거부한다.
+        """
+        if self.ai_stub_mode and self.app_env == "prod":
+            raise ValueError(
+                "AI_STUB_MODE 는 prod 에서 쓸 수 없습니다. 부하 테스트용 더미 응답 설정입니다."
+            )
+        return self
 
     @property
     def gemini_api_keys(self) -> list[str]:
