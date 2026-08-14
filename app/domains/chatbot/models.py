@@ -27,6 +27,12 @@ class ChatbotKnowledge(Base):
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     chunk_key: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
+
+    # POSITIVE(우리 서비스 얘기) / NEGATIVE(차단해야 하는 유형).
+    #
+    # Enum 타입이 아니라 문자열로 둔다. 값을 늘릴 때 DB 타입을 손대지 않아도 되고,
+    # 판정은 애플리케이션이 한다. 잘못된 값이 들어오면 그 청크만 양성으로 떨어진다.
+    polarity: Mapped[str] = mapped_column(String(10), nullable=False, server_default="POSITIVE")
     embedding: Mapped[list[float]] = mapped_column(Vector(_DIMENSION), nullable=False)
     model: Mapped[str] = mapped_column(String(50), nullable=False)
     source_hash: Mapped[str] = mapped_column(String(64), nullable=False)

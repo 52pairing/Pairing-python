@@ -11,6 +11,7 @@ GeminiTask.CHATBOT을 추가하고 이 파일의 참조만 바꾸면 된다.
 
 import json
 import logging
+from enum import Enum
 
 from app.clients.gemini import GeminiClient, GeminiTask, GeminiUsage
 from app.core.config import get_settings
@@ -31,6 +32,27 @@ logger = logging.getLogger(__name__)
 _OUT_OF_SCOPE_ANSWER = (
     "페어링 서비스 관련 질문에만 답변드릴 수 있어요. 이용 방법이나 정책에 대해 물어봐 주세요."
 )
+
+_GREETING_ANSWER = (
+    "안녕하세요! 페어링 이용을 도와드리는 챗봇이에요. "
+    "이력서, 매칭, 계약, 수수료, 등급처럼 궁금한 걸 물어봐 주세요."
+)
+
+class Verdict(Enum):
+    """게이트 판정 결과.
+
+    불리언 하나로는 부족하다. "통과/차단"에 인사가 끼면 세 갈래가 되고, 호출부가
+    조건을 두 번 검사하게 된다. 세 값을 명시하면 어느 하나를 빠뜨렸을 때 눈에 띈다.
+    """
+
+    PASS = "PASS"
+    """정책 범위 안. LLM 을 부른다."""
+
+    BLOCK = "BLOCK"
+    """범위 밖. LLM 을 부르지 않고 거절한다."""
+
+    GREETING = "GREETING"
+    """인사. LLM 을 부르지 않고 정해진 인사로 답하며 사용량도 깎지 않는다."""
 
 # 답변과 이어지는 화면 코드. LLM 에게 URL 을 만들게 하면 없는 경로를 지어내므로,
 # 고를 수 있는 값을 여기서 닫아 둔다. 실제 경로 매핑은 스프링이 한다.
@@ -164,7 +186,15 @@ class ChatbotService:
     async def ask(self, request: AskRequest) -> AskResponse:
         model = self._gemini.model_for(GeminiTask.NEGOTIATION)
 
-        if not await self._is_relevant(request.question):
+        verdict = await self._judge(request.question)
+
+        if verdict is Verdict.GREETING:
+            # 인사도 LLM 을 안 부른다. 답이 고정인데 2초와 토큰을 쓸 이유가 없다.
+            return AskResponse(
+                answer=_GREETING_ANSWER, intent="NONE", model=model, charge_quota=False,
+            )
+
+        if verdict is Verdict.BLOCK:
             # LLM 을 부르지 않고 여기서 끝낸다. 이게 이 게이트의 존재 이유다 —
             # 무관한 질문에 토큰을 쓰고 사용자 한도까지 깎던 것을 막는다.
             return AskResponse(
@@ -196,7 +226,11 @@ class ChatbotService:
         # 게이트를 통과했어도 LLM 이 "이건 우리 얘기가 아니다"라고 판단할 수 있다. 2중 방어다 —
         # 임계값을 느슨하게 잡아 둔 만큼 통과하는 질문이 생기고, 그건 여기서 걸린다.
         if parsed.get("out_of_scope") is True:
-            logger.info("[챗봇 범위 밖 - LLM 판정] 질문=%s", request.question)
+            logger.info(
+                "[챗봇 2차방어] LLM 이 범위 밖으로 판정 -> 차감 안 함 | 질문=%s "
+                "(게이트는 통과했다는 뜻이다. 이 줄이 자주 보이면 임계값이 너무 느슨하다)",
+                request.question,
+            )
             return AskResponse(
                 answer=_OUT_OF_SCOPE_ANSWER, intent="NONE", model=model,
                 out_of_scope=True, charge_quota=False,
@@ -209,6 +243,14 @@ class ChatbotService:
         # 다만 질문이 아니므로 하루 10회에서 깎지 않는다 — 실제로 뭘 묻기도 전에 한도가 준다.
         greeting = parsed.get("greeting") is True
 
+        logger.info(
+            "[챗봇 답변] intent=%s 인사=%s 차감=%s | 질문=%s",
+            self._read_intent(parsed),
+            greeting,
+            not greeting,
+            request.question,
+        )
+
         return AskResponse(
             answer=answer.strip(),
             intent=self._read_intent(parsed),
@@ -216,40 +258,104 @@ class ChatbotService:
             charge_quota=not greeting,
         )
 
-    async def _is_relevant(self, question: str) -> bool:
-        """질문이 페어링 정책 범위 안인지 임베딩 유사도로 판정한다.
+    async def _judge(self, question: str) -> Verdict:
+        """질문을 통과·차단·인사 중 하나로 가른다. 임베딩 한 번으로 셋 다 판정한다.
 
         판정할 수 없는 상황(지식 미시딩, 임베딩 실패)은 <b>전부 통과</b>시킨다.
         게이트는 부가 장치다. 판정이 안 된다고 막아버리면 정상 질문까지 전부 차단된다 —
         무관한 질문에 답하는 것보다 훨씬 나쁘다.
+
+        질문 하나당 반드시 [챗봇 게이트] 한 줄을 남긴다. 통과했을 때도 남기는 이유는,
+        로그가 없으면 "게이트가 통과시킨 것"과 "게이트가 아예 안 돈 것"을 구분할 수 없기
+        때문이다. 둘은 겉보기 동작이 같지만 하나는 정상이고 하나는 고장이다.
         """
         if self._knowledge_repository is None:
-            return True
+            logger.info("[챗봇 게이트] 판정 생략(지식 저장소 미주입) -> LLM 호출함 | 질문=%s", question)
+            return Verdict.PASS
 
         try:
             vectors = await self._gemini.embed([question])
-            nearest = await self._knowledge_repository.find_nearest(vectors[0])
+            evidence = await self._knowledge_repository.find_gate_evidence(vectors[0])
         except Exception:
-            logger.warning("챗봇 관련성 판정 실패 - 통과시킨다", exc_info=True)
-            return True
+            logger.warning(
+                "[챗봇 게이트] 판정 실패 -> LLM 호출함 | 질문=%s "
+                "(chatbot_knowledge 테이블이 없거나 임베딩 호출이 실패했다)",
+                question,
+                exc_info=True,
+            )
+            return Verdict.PASS
 
-        if nearest is None:
-            logger.warning("챗봇 지식 청크가 비어 있다 - 관련성 판정을 건너뛴다")
-            return True
-
-        threshold = self._settings.chatbot_relevance_threshold
-        relevant = nearest.similarity >= threshold
-
-        if not relevant:
-            # 차단된 질문을 남긴다. 임계값을 조이거나 청크를 보강할 근거가 이 로그다.
-            logger.info(
-                "[챗봇 범위 밖 차단] similarity=%.3f (임계 %.2f), 최근접=%s, 질문=%s",
-                nearest.similarity,
-                threshold,
-                nearest.chunk_key,
+        if evidence.is_empty:
+            logger.warning(
+                "[챗봇 게이트] 지식이 비어 있음 -> LLM 호출함 | 질문=%s "
+                "(재색인 API 를 아직 안 돌렸다. 이 상태에서는 게이트가 아무것도 막지 않는다)",
                 question,
             )
-        return relevant
+            return Verdict.PASS
+
+        positive = evidence.positive
+        negative = evidence.negative
+        greeting = evidence.greeting
+
+        if positive is None:
+            logger.warning(
+                "[챗봇 게이트] 양성 청크가 없음 -> LLM 호출함 | 질문=%s "
+                "(시딩이 반쪽만 됐다. 비교 기준이 없으면 판정하지 않는다)",
+                question,
+            )
+            return Verdict.PASS
+
+        # 인사는 정책 질문도 차단 대상도 아닌 제3의 부류라 먼저 본다. 다만 <b>정책 질문보다
+        # 확실히 가까울 때만</b> 인사로 처리한다 — "안녕하세요 수수료 얼마예요?" 를 인사로
+        # 보면 정해진 인사만 돌려주고 진짜 질문은 답하지 않은 채 끝난다.
+        if greeting is not None and greeting.similarity > positive.similarity + self._settings.chatbot_negative_margin:
+            logger.info(
+                "[챗봇 게이트] 인사 인사말=%s(%.3f) 양성=%s(%.3f) "
+                "-> LLM 호출 안 함, 차감 안 함 | 질문=%s",
+                greeting.chunk_key,
+                greeting.similarity,
+                positive.chunk_key,
+                positive.similarity,
+                question,
+            )
+            return Verdict.GREETING
+
+        # 판정은 두 단계다.
+        #
+        # ① 음성이 양성을 여유(margin) 넘게 앞서면 막는다. 단순히 "음성이 더 가까우면"으로
+        #    하면 정상 질문이 막힌다 — 음성 청크는 주제어를 나열하게 되어 짧고 일반적인
+        #    질문이 거기에 더 붙는다. 진짜 무관한 질문은 여유보다 훨씬 크게 앞선다.
+        #
+        # ② 양성이 하한 미달이면 막는다. 음성 본보기가 못 덮는 종류(전혀 새로운 주제)를
+        #    여기서 걸러낸다.
+        threshold = self._settings.chatbot_relevance_threshold
+        margin = self._settings.chatbot_negative_margin
+        gap = negative.similarity - positive.similarity if negative else None
+
+        if gap is not None and gap > margin:
+            verdict = Verdict.BLOCK
+            reason = f"차단 본보기가 {gap:+.3f} 앞섬(여유 {margin:.2f})"
+        elif positive.similarity < threshold:
+            verdict = Verdict.BLOCK
+            reason = f"양성 최고점이 하한({threshold:.2f}) 미달"
+        else:
+            verdict = Verdict.PASS
+            reason = "통과"
+
+        passed = verdict is Verdict.PASS
+        # 통과·차단 모두 남긴다. 임계값·여유를 조이거나 청크를 보강할 근거가 이 숫자다.
+        logger.info(
+            "[챗봇 게이트] %s 양성=%s(%.3f) 음성=%s(%s) 사유=%s -> %s | 질문=%s",
+            "통과" if passed else "차단",
+            positive.chunk_key,
+            positive.similarity,
+            negative.chunk_key if negative else "없음",
+            f"{negative.similarity:.3f}" if negative else "-",
+            reason,
+            "LLM 호출함" if passed else "LLM 호출 안 함(토큰·한도 절약)",
+            question,
+        )
+        return verdict
 
     @staticmethod
     def _read_intent(parsed: dict) -> str:
