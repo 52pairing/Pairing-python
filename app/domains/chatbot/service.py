@@ -53,8 +53,10 @@ _ANSWER_SCHEMA = {
         "intent": {"type": "string", "enum": _INTENTS},
         # 임베딩 게이트를 통과했더라도 모델이 다시 한 번 판단한다. 2중 방어다.
         "out_of_scope": {"type": "boolean"},
+        # 인사말 여부. 답은 하되 하루 사용량은 깎지 않는다.
+        "greeting": {"type": "boolean"},
     },
-    "required": ["answer", "intent", "out_of_scope"],
+    "required": ["answer", "intent", "out_of_scope", "greeting"],
 }
 
 _INTENT_GUIDE = """
@@ -165,7 +167,10 @@ class ChatbotService:
         if not await self._is_relevant(request.question):
             # LLM 을 부르지 않고 여기서 끝낸다. 이게 이 게이트의 존재 이유다 —
             # 무관한 질문에 토큰을 쓰고 사용자 한도까지 깎던 것을 막는다.
-            return AskResponse(answer=_OUT_OF_SCOPE_ANSWER, intent="NONE", model=model, out_of_scope=True)
+            return AskResponse(
+                answer=_OUT_OF_SCOPE_ANSWER, intent="NONE", model=model,
+                out_of_scope=True, charge_quota=False,
+            )
 
         prompt = self._build_prompt(request.question)
 
@@ -193,13 +198,23 @@ class ChatbotService:
         if parsed.get("out_of_scope") is True:
             logger.info("[챗봇 범위 밖 - LLM 판정] 질문=%s", request.question)
             return AskResponse(
-                answer=_OUT_OF_SCOPE_ANSWER, intent="NONE", model=model, out_of_scope=True
+                answer=_OUT_OF_SCOPE_ANSWER, intent="NONE", model=model,
+                out_of_scope=True, charge_quota=False,
             )
 
         if not isinstance(answer, str) or not answer.strip():
             raise AiException(AiErrorCode.LLM_RESPONSE_INVALID, "답변이 비어 있습니다.")
 
-        return AskResponse(answer=answer.strip(), intent=self._read_intent(parsed), model=model)
+        # 인사에는 답한다. "안녕"에 "답변드릴 수 없어요"라고 하면 챗봇이 고장난 것처럼 보인다.
+        # 다만 질문이 아니므로 하루 10회에서 깎지 않는다 — 실제로 뭘 묻기도 전에 한도가 준다.
+        greeting = parsed.get("greeting") is True
+
+        return AskResponse(
+            answer=answer.strip(),
+            intent=self._read_intent(parsed),
+            model=model,
+            charge_quota=not greeting,
+        )
 
     async def _is_relevant(self, question: str) -> bool:
         """질문이 페어링 정책 범위 안인지 임베딩 유사도로 판정한다.
@@ -300,6 +315,12 @@ class ChatbotService:
             "'1+1은?' 에 '2입니다' 라고 답하면 안 된다.\n"
             "페어링 이용 방법·정책에 관한 질문이면 답할 수 있든 없든 out_of_scope 는 false 다. "
             "(정책에 없어서 못 답하는 것과 우리 서비스 얘기가 아닌 것은 다르다)\n"
+            "\n"
+            "[greeting]\n"
+            "'안녕', '반가워', '고마워' 처럼 인사·감사 표현이면 greeting 을 true 로 한다. "
+            "이때 out_of_scope 는 false 이고, 짧게 인사한 뒤 무엇을 물어볼 수 있는지 안내한다.\n"
+            "그 외에는 전부 false 다. 질문에 인사가 섞여 있어도(예: '안녕하세요, 수수료가 얼마인가요?') "
+            "질문이 있으면 greeting 은 false 다 — 실제로 답을 준 것이므로 사용량을 깎아야 한다.\n"
             "\n"
             "answer 와 함께 intent 를 하나 고른다. 답변을 읽은 사용자가 바로 갈 만한 화면이 "
             "있을 때만 고르고, 애매하면 NONE 을 쓴다.\n"

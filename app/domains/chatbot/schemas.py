@@ -19,9 +19,14 @@ class AskResponse(BaseModel):
     model: str = Field(..., description="답변에 쓴 LLM 모델명. 결과 재현·감사용")
     out_of_scope: bool = Field(
         False,
+        description="페어링과 무관한 질문이어서 답하지 않았다는 표시. 관찰용이며 차감 판단은 charge_quota 가 한다.",
+    )
+    charge_quota: bool = Field(
+        True,
         description=(
-            "페어링과 무관한 질문이어서 답하지 않았다는 표시. "
-            "스프링은 이 값이 true 면 사용량을 차감하지 않고 고정 안내 문구로 응답한다."
+            "하루 사용량을 깎아야 하는지. 스프링이 이 값만 보고 판단한다. "
+            "범위 밖 질문(답을 못 줌)과 단순 인사(질문이 아님)는 false 다 — "
+            "답을 받지 못했는데 횟수만 빠지면 오타 한 번에 1회가 날아간다."
         ),
     )
 
