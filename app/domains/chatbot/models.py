@@ -28,10 +28,17 @@ class ChatbotKnowledge(Base):
     chunk_key: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
 
-    # POSITIVE(우리 서비스 얘기) / NEGATIVE(차단해야 하는 유형).
+    # 청크가 어느 부류인지.
+    #   POSITIVE  우리 서비스 얘기. 여기에 가까우면 답한다.
+    #   NEGATIVE  차단해야 하는 질문의 본보기. 여기에 확실히 가까우면 LLM 없이 거절한다.
+    #   GREETING  인사말 본보기. 여기에 확실히 가까우면 고정 인사로 답하고 사용량도 안 깎는다.
+    #
+    # 셋을 한 표에 두는 이유는 판정이 "얼마나 가까운가"가 아니라 "어느 쪽에 더 가까운가"라서다.
+    # 같은 벡터 공간에 있어야 서로 비교할 수 있다.
     #
     # Enum 타입이 아니라 문자열로 둔다. 값을 늘릴 때 DB 타입을 손대지 않아도 되고,
-    # 판정은 애플리케이션이 한다. 잘못된 값이 들어오면 그 청크만 양성으로 떨어진다.
+    # 판정은 애플리케이션이 한다. 잘못된 값이 들어오면 그 청크는 어느 부류에도 안 잡혀
+    # 판정에서 조용히 빠진다 — 막는 쪽이 아니라 무시되는 쪽이라 안전하다.
     polarity: Mapped[str] = mapped_column(String(10), nullable=False, server_default="POSITIVE")
     embedding: Mapped[list[float]] = mapped_column(Vector(_DIMENSION), nullable=False)
     model: Mapped[str] = mapped_column(String(50), nullable=False)
