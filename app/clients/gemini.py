@@ -21,6 +21,7 @@ from enum import Enum
 from google import genai
 from google.genai import types
 
+from app.clients.gemini_stub import StubGenaiClient
 from app.core.config import Settings, get_settings
 from app.core.errors import AiErrorCode, AiException
 from app.core.metrics import (
@@ -30,6 +31,7 @@ from app.core.metrics import (
     gemini_keys_total,
     gemini_request_duration_seconds,
     gemini_requests_total,
+    gemini_stub_mode,
     gemini_tokens_total,
 )
 
@@ -138,8 +140,19 @@ class GeminiClient:
         self._settings = settings or get_settings()
         keys = self._settings.gemini_api_keys
 
-        # 키마다 클라이언트를 미리 만든다. 전환 시점에 만들면 그 생성 비용이 요청 지연에 실린다.
-        self._clients = [genai.Client(api_key=key) for key in keys]
+        # 부하 테스트 모드면 실제 호출 대신 더미를 준다. 클라이언트 자리만 바꿔 끼우므로
+        # 아래의 재시도·키 전환·메트릭 경로는 하나도 우회되지 않는다.
+        # (app/clients/gemini_stub.py 의 설명 참고)
+        stub = self._settings.ai_stub_mode
+        gemini_stub_mode.set(1 if stub else 0)
+
+        if stub:
+            # 키 개수는 그대로 유지한다. 키 전환 동작까지 스텁으로 재현하기 위함이다.
+            self._clients = [StubGenaiClient(self._settings) for _ in keys]
+        else:
+            # 키마다 클라이언트를 미리 만든다. 전환 시점에 만들면 그 생성 비용이 요청 지연에 실린다.
+            self._clients = [genai.Client(api_key=key) for key in keys]
+
         self._key_count = len(self._clients)
 
         # 한도에 걸린 키를 언제까지 건너뛸지(monotonic 초). 단일 이벤트 루프에서만 갱신되므로
