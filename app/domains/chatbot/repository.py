@@ -27,16 +27,23 @@ class ChunkMatch:
 
 @dataclass(frozen=True)
 class GateEvidence:
-    """게이트가 판정에 쓰는 재료. 양성·음성 각각의 최고점을 함께 준다.
+    """게이트가 판정에 쓰는 재료. 부류별 최고점을 함께 준다.
 
-    최근접 하나만 보면 안 된다. 음성 청크는 주제어를 여러 개 나열하게 되어서, 짧고 일반적인
-    정상 질문("수수료 얼마야?")이 구체적인 숫자로 채워진 양성 청크보다 음성 목록에 더
-    붙는다. 실측에서 정상 질문 3개가 이렇게 막혔다. 둘을 나란히 놓고 비교해야 한다.
+    <b>최근접 하나만 보면 안 된다.</b> 음성 청크는 주제어를 여러 개 나열하게 되어서, 짧고
+    일반적인 정상 질문("수수료 얼마야?")이 구체적인 숫자로 채워진 양성 청크보다 음성 목록에
+    더 붙는다. 실측에서 정상 질문 3개가 이렇게 막혔다. 나란히 놓고 비교해야 한다.
+
+    셋 다 {@code None} 일 수 있다. 시딩 전이거나 DB 가 비었을 때다. 호출부가 통과로 처리한다.
     """
 
     positive: ChunkMatch | None
+    """정책 범위 안이라는 근거. 이게 없으면 비교 기준이 없어 판정하지 않는다."""
+
     negative: ChunkMatch | None
+    """차단 근거. 양성보다 여유 넘게 앞설 때만 막는다."""
+
     greeting: ChunkMatch | None
+    """인사 근거. 양성보다 여유 넘게 앞설 때만 인사로 본다."""
 
     @property
     def is_empty(self) -> bool:
@@ -83,13 +90,17 @@ class ChatbotKnowledgeRepository:
         )
 
     async def find_gate_evidence(self, vector: list[float]) -> GateEvidence:
-        """극성별 최근접 청크를 한 번에 가져온다.
+        """부류별 최근접 청크를 한 번에 가져온다.
 
-        <p>둘 다 None 인 경우를 "관련 없음"으로 해석하면 안 된다. 시딩 전이거나 DB 가 비었을
+        <p>전부 None 인 경우를 "관련 없음"으로 해석하면 안 된다. 시딩 전이거나 DB 가 비었을
         때도 그렇게 나오므로, 그대로 차단하면 <b>모든 질문이 막힌다.</b> 호출부가 통과로 처리한다.
         """
         distance = ChatbotKnowledge.embedding.cosine_distance(vector)
-        # DISTINCT ON 으로 극성마다 1행만 남긴다. 쿼리를 두 번 보내지 않는다.
+        # DISTINCT ON 으로 부류마다 1행만 남긴다. 부류 수만큼 쿼리를 보내지 않는다.
+        #
+        # order_by 의 첫 컬럼이 반드시 distinct 대상(polarity)이어야 한다. PostgreSQL 이
+        # 요구하는 조건이고, 어기면 문법 오류로 바로 터진다. 그 다음이 distance 라서
+        # 부류별로 가장 가까운 행이 맨 앞에 오고 DISTINCT ON 이 그것만 남긴다.
         stmt = (
             select(ChatbotKnowledge.polarity, ChatbotKnowledge.chunk_key, distance)
             .distinct(ChatbotKnowledge.polarity)
