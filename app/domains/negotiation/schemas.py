@@ -12,6 +12,13 @@ class ConditionContext(BaseModel):
     # 대리인은 가드로만 쓰고 응답 텍스트에 노출하지 않는다.
     client_floor: str | None = Field(default=None, description="클라 마지노선(가드)")
     freelancer_floor: str | None = Field(default=None, description="프리 마지노선(가드)")
+    # 직전 라운드에서 각 대리인이 마지막으로 낸 제시값(= 현재 협상 위치). 라운드 1 이거나 그 측
+    # 제안이 아직 없으면 None → 그때는 희망값에서 시작한다. 값이 있으면 매 라운드 희망값으로
+    # 리셋하지 말고 여기서 이어 협상한다(사람이 재지시로 좁혀 온 진행을 보존).
+    client_last_value: str | None = Field(default=None, description="클라 대리인 직전 제시값(현재 위치)")
+    freelancer_last_value: str | None = Field(
+        default=None, description="프리 대리인 직전 제시값(현재 위치)"
+    )
     # 선택형(enum) 쟁점은 후보를 안 주면 LLM 이 없는 값을 지어낸다(예: WORK_STYLE 에 HYBRID).
     allowed_values: list[str] | None = Field(
         default=None,
