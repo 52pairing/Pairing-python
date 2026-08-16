@@ -19,6 +19,11 @@ class ConditionContext(BaseModel):
     freelancer_last_value: str | None = Field(
         default=None, description="프리 대리인 직전 제시값(현재 위치)"
     )
+    # 마지노선 방향(MAX=상한/MIN=하한/CHOICE=허용값/NONE). 스프링(ConditionType)이 정한 값을 그대로
+    # 받는다 — 프롬프트가 타입으로 다시 추론하지 않기 위해서다(방향 단일 진실 원본). None 이면(구 백엔드)
+    # 기존 가정(클라=MAX, 프리=MIN)으로 폴백한다.
+    client_floor_direction: str | None = Field(default=None, description="클라 마지노선 방향")
+    freelancer_floor_direction: str | None = Field(default=None, description="프리 마지노선 방향")
     # 선택형(enum) 쟁점은 후보를 안 주면 LLM 이 없는 값을 지어낸다(예: WORK_STYLE 에 HYBRID).
     allowed_values: list[str] | None = Field(
         default=None,

@@ -85,6 +85,24 @@ _RESPONSE_SCHEMA = {
 }
 
 
+def _floor_label(who: str, floor: str | None, direction: str) -> str | None:
+    """마지노선을 방향에 맞는 문구로 만든다.
+
+    스프링(ConditionType.floorDirectionFor)이 정한 방향을 그대로 쓴다 — 여기서 타입으로 다시
+    추론하지 않는다(방향 단일 진실 원본). MAX=상한(초과 거절), MIN=하한(미달 거절),
+    CHOICE=수용값. 시작일은 클라·프리 모두 MAX 로 내려온다.
+    """
+    if not floor:
+        return None
+    if direction == "MAX":
+        return f"{who}상한(이_값을_초과하면_{who}가_거절)={floor}"
+    if direction == "MIN":
+        return f"{who}하한(이_값에_못_미치면_{who}가_거절)={floor}"
+    if direction == "CHOICE":
+        return f"{who}수용값={floor}"
+    return None
+
+
 class NegotiationService:
     def __init__(
         self,
@@ -182,14 +200,23 @@ class NegotiationService:
     def _build_prompt(self, request: ProposeRequest) -> str:
         lines = []
         for c in request.conditions:
-            # 마지노선은 방향을 함께 적는다. "클라마지노선=3300000" 만 주면 LLM 이 그게 상한인지
-            # 하한인지 몰라 그 값을 넘겨 합의해 버린다(실제로 프리 하한 480만인데 330만을 수락했다).
             line = (
                 f"- condition_id={c.condition_id}, 쟁점={c.type}, "
-                f"클라희망={c.client_value}, 프리희망={c.freelancer_value}, "
-                f"클라상한(이_값을_초과하면_클라가_거절)={c.client_floor}, "
-                f"프리하한(이_값에_못_미치면_프리가_거절)={c.freelancer_floor}"
+                f"클라희망={c.client_value}, 프리희망={c.freelancer_value}"
             )
+            # 마지노선은 방향(상한/하한)까지 함께 적는다 — 방향을 모르면 LLM 이 그 값을 넘겨 합의해
+            # 버린다(실제로 프리 하한 480만인데 330만을 수락했다). 방향은 스프링이 실어 보낸 값을 그대로
+            # 쓰고, 없으면(구 백엔드) 기존 가정(클라=상한, 프리=하한)으로 폴백한다.
+            for part in (
+                _floor_label("클라", c.client_floor, c.client_floor_direction or "MAX"),
+                _floor_label("프리", c.freelancer_floor, c.freelancer_floor_direction or "MIN"),
+            ):
+                if part:
+                    line += f", {part}"
+            # 시작일은 양측 상한이라 프리 하한이 없다. 대신 프리희망=가용 시작일이 물리적 하한이므로
+            # 그보다 이르게는 제안·수락 못 한다는 것을 명시한다(스프링 가드도 같은 하한을 강제한다).
+            if c.type == "START_DATE" and c.freelancer_value:
+                line += f", 프리가용시작일(이보다_이르게는_시작_불가)={c.freelancer_value}"
             # 직전 라운드 각 측 마지막 제시값(= 현재 협상 위치). 있으면 오프닝을 희망값이 아니라
             # 여기서 잡는다(규칙 1-2). 사람이 재지시로 좁혀 온 진행을 매 라운드 리셋하지 않기 위해서다.
             if c.client_last_value is not None or c.freelancer_last_value is not None:

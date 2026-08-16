@@ -202,6 +202,44 @@ def test_build_prompt_carries_last_values_and_no_backward_rule():
     assert "세 번째 제약" in prompt
 
 
+def test_build_prompt_renders_start_date_floor_as_upper_with_available_from():
+    """START_DATE 는 프리 마지노선도 상한(MAX)으로 내려온다 — '프리하한'이 아니라 '프리상한' + 가용 시작일."""
+    request = ProposeRequest(
+        negotiation_id=300,
+        round=1,
+        conditions=[
+            ConditionContext(
+                condition_id=402,
+                type="START_DATE",
+                client_value="2026-09-01",
+                freelancer_value="2026-10-01",
+                client_floor="2026-09-22",
+                freelancer_floor="2026-10-21",
+                client_floor_direction="MAX",
+                freelancer_floor_direction="MAX",
+            )
+        ],
+    )
+
+    prompt = NegotiationService(_FakeGemini({}))._build_prompt(request)
+
+    # 조건 라인에 프리 마지노선이 '상한'으로 렌더된다(방향 뒤집힘이면 이 구체 문자열이 없다).
+    assert "프리상한(이_값을_초과하면_프리가_거절)=2026-10-21" in prompt
+    assert "클라상한(이_값을_초과하면_클라가_거절)=2026-09-22" in prompt
+    # 프리 물리적 하한(가용 시작일) 명시.
+    assert "프리가용시작일(이보다_이르게는_시작_불가)=2026-10-01" in prompt
+    # 뒤집힌 '프리하한=10/21' 은 나오면 안 된다(규칙 텍스트의 일반 '프리하한'과 구분되는 구체 라벨).
+    assert "프리하한(이_값에_못_미치면_프리가_거절)=2026-10-21" not in prompt
+
+
+def test_build_prompt_defaults_amount_directions_when_missing():
+    """방향 필드가 없으면(구 백엔드) 기존 가정으로 폴백 — 클라=상한, 프리=하한."""
+    prompt = NegotiationService(_FakeGemini({}))._build_prompt(_amount_request())
+    # _amount_request: client_floor=4500000, freelancer_floor=5500000, 방향 없음 → 폴백.
+    assert "클라상한(이_값을_초과하면_클라가_거절)=4500000" in prompt
+    assert "프리하한(이_값에_못_미치면_프리가_거절)=5500000" in prompt
+
+
 def test_build_prompt_omits_last_values_on_first_round():
     """직전제시가 없으면(첫 라운드) 조건 라인에 값 필드를 노출하지 않는다 — 그때는 희망값에서 시작.
 
