@@ -172,6 +172,46 @@ async def test_propose_records_failed_log_when_llm_call_fails():
     assert call.prompt_tokens is None
 
 
+def test_build_prompt_carries_last_values_and_no_backward_rule():
+    """직전제시가 주어지면 프롬프트에 노출하고, 오프닝 이어가기·역주행 금지 규칙을 싣는다."""
+    request = ProposeRequest(
+        negotiation_id=300,
+        round=3,
+        budget_cap=5_000_000,
+        conditions=[
+            ConditionContext(
+                condition_id=401,
+                type="AMOUNT",
+                client_value="4000000",
+                freelancer_value="6000000",
+                client_floor="4500000",
+                freelancer_floor="5500000",
+                client_last_value="4400000",
+                freelancer_last_value="5000000",
+            )
+        ],
+    )
+
+    prompt = NegotiationService(_FakeGemini({}))._build_prompt(request)
+
+    # 직전제시가 조건 라인에 노출된다.
+    assert "클라직전제시=4400000" in prompt
+    assert "프리직전제시=5000000" in prompt
+    # 오프닝을 직전제시에서 이어가라는 규칙 + 역주행/작화 금지 제약이 실린다.
+    assert "직전제시" in prompt
+    assert "세 번째 제약" in prompt
+
+
+def test_build_prompt_omits_last_values_on_first_round():
+    """직전제시가 없으면(첫 라운드) 조건 라인에 값 필드를 노출하지 않는다 — 그때는 희망값에서 시작.
+
+    (규칙 설명 텍스트에는 '직전제시'라는 말이 항상 들어가므로, 조건 라인의 값 필드로 확인한다.)
+    """
+    prompt = NegotiationService(_FakeGemini({}))._build_prompt(_amount_request())
+    assert "클라직전제시=" not in prompt
+    assert "프리직전제시=" not in prompt
+
+
 async def test_propose_records_failed_log_with_raw_response_when_parsing_fails():
     """파싱 실패는 응답 원문이 있어야 원인을 되짚을 수 있다."""
     ai_log = AsyncMock()
