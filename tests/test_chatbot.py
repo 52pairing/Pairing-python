@@ -23,7 +23,9 @@ class _FakeGemini:
     def model_for(self, task: GeminiTask) -> str:
         return _MODEL
 
-    async def generate_json_with_usage(self, task, prompt, schema) -> tuple[str, GeminiUsage]:
+    async def generate_json_with_usage(
+        self, task, prompt, schema, *, temperature=None
+    ) -> tuple[str, GeminiUsage]:
         if self._error is not None:
             raise self._error
         raw = self._raw if self._raw is not None else json.dumps(self._payload)

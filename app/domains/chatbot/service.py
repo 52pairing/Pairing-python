@@ -217,7 +217,8 @@ class ChatbotService:
 
         try:
             raw, usage = await self._gemini.generate_json_with_usage(
-                GeminiTask.NEGOTIATION, prompt, _ANSWER_SCHEMA
+                GeminiTask.NEGOTIATION, prompt, _ANSWER_SCHEMA,
+                temperature=self._settings.chatbot_temperature,
             )
         except AiException as exc:
             await self._record_call(request.question, model, None, None, str(exc))

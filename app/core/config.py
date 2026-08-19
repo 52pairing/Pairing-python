@@ -86,6 +86,12 @@ class Settings(BaseSettings):
     #
     # 이 값은 "정상 질문을 막는 쪽이 더 나쁘다"를 숫자로 표현한 것이다. 애매하면 통과시킨다.
     chatbot_negative_margin: float = 0.08
+
+    # 답변 생성 temperature. 기본값(1.0)을 그대로 쓰면 같은 질문에도 정책 문구를
+    # 매번 다르게 바꿔 말할 위험이 있다. 이 챗봇은 답변을 _POLICY_CONTEXT 안에서만
+    # 만들고 메뉴 경로도 원문 그대로 써야 하는, 창의성보다 일관성이 중요한 용도라 낮춘다.
+    # 0으로 두면 문장이 기계적으로 반복돼 0.2~0.3 사이로 잡는다.
+    chatbot_temperature: float = 0.2
     # ---------- AI 스텁 (부하 테스트 전용) ----------
     # 켜면 Gemini 를 실제로 부르지 않고 스키마에 맞는 더미를 만들어 돌려준다.
     # (app/clients/gemini_stub.py)

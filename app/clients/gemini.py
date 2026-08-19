@@ -385,15 +385,21 @@ class GeminiClient:
         self._record(task_label, model, started, "success", usage)
         return vectors, usage
 
-    async def generate_json(self, task: GeminiTask, prompt: str, response_schema: dict) -> str:
+    async def generate_json(
+        self, task: GeminiTask, prompt: str, response_schema: dict, *, temperature: float | None = None
+    ) -> str:
         """구조화된 응답을 받는다. 자유 텍스트를 파싱하면 프롬프트가 바뀔 때마다 깨진다."""
-        text, _ = await self.generate_json_with_usage(task, prompt, response_schema)
+        text, _ = await self.generate_json_with_usage(task, prompt, response_schema, temperature=temperature)
         return text
 
     async def generate_json_with_usage(
-        self, task: GeminiTask, prompt: str, response_schema: dict
+        self, task: GeminiTask, prompt: str, response_schema: dict, *, temperature: float | None = None
     ) -> tuple[str, GeminiUsage]:
-        """{@link generate_json} 과 같지만 호출 통계를 함께 준다. ai_agent_log 를 남기는 쪽에서 쓴다."""
+        """{@link generate_json} 과 같지만 호출 통계를 함께 준다. ai_agent_log 를 남기는 쪽에서 쓴다.
+
+        temperature 를 안 주면(None) SDK/모델 기본값을 그대로 쓴다 — 태스크별로 다르게
+        쓰고 싶을 때만 호출부에서 넘기고, 기존 호출부는 지금까지의 동작 그대로다.
+        """
         model = self.model_for(task)
         started = time.perf_counter()
 
@@ -404,6 +410,7 @@ class GeminiClient:
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json",
                     response_schema=response_schema,
+                    temperature=temperature,
                 ),
             )
             if not response.text:
